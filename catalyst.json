@@ -1,0 +1,15 @@
+{
+  "id": "33617000000070002",
+  "project_name": "Assets-Icons-Management",
+  "platform_type": "node18",
+  "functions": {
+    "targets": [
+      "spriteForgeJoin",
+      "upload-to-stratus"
+    ],
+    "source": "functions"
+  },
+  "client": {
+    "source": "frontend"
+  }
+}

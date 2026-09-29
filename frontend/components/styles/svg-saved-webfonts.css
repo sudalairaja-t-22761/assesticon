@@ -1,0 +1,111 @@
+/* ── Saved WebFonts page ──────────────────────────────────────────────────── */
+.swf-list { display: flex; flex-direction: column; gap: 10px; min-height: 48px; }
+
+.swf-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color .15s;
+}
+.swf-card:hover { border-color: var(--accent); }
+
+.swf-card-icon {
+  width: 36px; height: 36px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-soft, rgba(99,102,241,.1));
+  border-radius: var(--radius-xs);
+  color: var(--accent);
+}
+
+.swf-card-info { flex: 1; min-width: 0; }
+.swf-card-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.swf-card-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+
+.swf-card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.swf-dl-group { display: flex; gap: 4px; flex-wrap: wrap; }
+.swf-dl-chip {
+  font-size: 10px; font-weight: 600; padding: 3px 7px;
+  border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg-body); color: var(--text-secondary);
+  cursor: pointer; transition: all .12s;
+  text-decoration: none;
+}
+.swf-dl-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft, rgba(99,102,241,.08)); }
+
+.swf-del-btn {
+  width: 28px; height: 28px; border-radius: var(--radius-xs);
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-tertiary); cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all .12s;
+}
+.swf-del-btn:hover { border-color: #ef4444; color: #ef4444; background: rgba(239,68,68,.08); }
+
+/* Save button in webfont result section */
+.wf-save-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--accent); background: transparent;
+  color: var(--accent); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all .15s;
+}
+.wf-save-btn:hover { background: var(--accent); color: #fff; }
+.wf-save-btn:disabled { opacity: .5; cursor: not-allowed; }
+.wf-save-btn.saving { opacity: .7; }
+
+.wf-save-status { font-size: 12px; color: var(--text-secondary); margin-left: 8px; }
+.wf-save-status.ok  { color: #22c55e; }
+.wf-save-status.err { color: #ef4444; }
+
+/* ── Stratus bucket path row ──────────────────────────────────────────────── */
+.swf-bucket-path {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  margin: 8px 0 6px;
+  background: var(--bg-body, #f8fafc);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary, #94a3b8);
+  word-break: break-all;
+}
+.swf-bucket-path svg { flex-shrink: 0; }
+.swf-bucket-path span { font-family: monospace; font-size: 10.5px; }
+
+/* ── Saved folder meta ────────────────────────────────────────────────────── */
+.saved-folder-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.saved-folder-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.saved-folder-date { font-size: 11px; color: var(--text-tertiary); }
+.saved-folder-path { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; display: flex; align-items: center; gap: 4px; }
+
+/* ── Stratus / Local badges ───────────────────────────────────────────────── */
+.saved-folder-badge {
+  display: inline-block;
+  font-size: 9px; font-weight: 700; letter-spacing: .04em;
+  padding: 1px 6px; border-radius: 10px;
+  background: rgba(99,102,241,.1); color: #6366f1;
+  border: 1px solid rgba(99,102,241,.2);
+  text-transform: uppercase; align-self: flex-start;
+}
+.saved-folder-badge--local {
+  background: rgba(245,158,11,.1); color: #d97706;
+  border-color: rgba(245,158,11,.25);
+}
+
+/* ── Download All as ZIP button (saved webfonts list) ─────────────────────── */
+.swf-zip-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--accent, #6366f1);
+  background: transparent;
+  color: var(--accent, #6366f1);
+  font-size: 11px; font-weight: 600;
+  cursor: pointer;
+  transition: all .14s;
+  white-space: nowrap;
+}
+.swf-zip-btn:hover  { background: var(--accent, #6366f1); color: #fff; }
+.swf-zip-btn:disabled { opacity: .5; cursor: not-allowed; }

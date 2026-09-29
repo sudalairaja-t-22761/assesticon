@@ -1,0 +1,19 @@
+{
+  "project_name": "Assets-Icons-Management",
+  "project_id": "33617000000070002",
+  "functions": {
+    "catalyst_functions": [
+      {
+        "name": "upload-to-stratus",
+        "type": "Advanced IO",
+        "lang_runtime": "nodejs18",
+        "folder_path": "functions/upload-to-stratus",
+        "memory_in_mb": 256,
+        "timeout": 30000
+      }
+    ]
+  },
+  "client": {
+    "folder_path": "frontend"
+  }
+}
