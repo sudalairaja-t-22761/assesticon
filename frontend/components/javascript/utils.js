@@ -385,6 +385,70 @@
     return state.settings.prefix + name + state.settings.symbolSuffix;
   };
 
+  // ── Loaded stylesheet + duplicate guard (Update Sprite mode) ─────────────
+
+  /**
+   * All class names used in selectors of a CSS/LESS text (".a, .b .c {…}" → a, b, c).
+   * @param {string} text
+   * @returns {Object} map lower-cased class → original class
+   */
+  SF.extractStylesheetClasses = function (text) {
+    var out = {};
+    var src = String(text || '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    var blockRe = /([^{};]+)\{/g;
+    var m;
+    while ((m = blockRe.exec(src)) !== null) {
+      var selector = m[1];
+      if (/^\s*@/.test(selector)) continue; // @media, @keyframes …
+      var clsRe = /\.(-?[_a-zA-Z][\w-]*)/g;
+      var c;
+      while ((c = clsRe.exec(selector)) !== null) out[c[1].toLowerCase()] = c[1];
+    }
+    return out;
+  };
+
+  /**
+   * Why an icon name cannot be added, or null when it is free.
+   * Checks (case-insensitive) every icon already in the workspace — including the
+   * loaded sprite's icons — and every class of the loaded stylesheet.
+   * @param {string} name        icon base name
+   * @param {number} [ignoreIdx] index in state.icons to ignore (renaming that icon)
+   * @returns {string|null}
+   */
+  SF.iconNameConflict = function (name, ignoreIdx) {
+    var n = String(name || '').trim();
+    if (!n) return 'name is empty';
+    var lower = n.toLowerCase();
+    var symbol = SF.makeSymbolId(n).toLowerCase();
+    var bare = (state.settings.prefix + n).toLowerCase();
+
+    for (var i = 0; i < state.icons.length; i++) {
+      if (i === ignoreIdx) continue;
+      var ic = state.icons[i];
+      if (!ic) continue;
+      if (String(ic.name || '').toLowerCase() === lower || String(ic.symbolId || '').toLowerCase() === symbol) {
+        return ic.isExisting
+          ? 'already in ' + (state.sourceSpriteName ? state.sourceSpriteName + '.svg' : 'the loaded sprite')
+          : 'already added';
+      }
+    }
+    var classes = state.sourceCssClasses || {};
+    if (classes[symbol] || classes[bare]) {
+      var file = state.sourceCssName ? state.sourceCssName + '.' + (state.sourceCssExt || 'css') : 'the loaded stylesheet';
+      return 'class .' + (classes[symbol] || classes[bare]) + ' already in ' + file;
+    }
+    return null;
+  };
+
+  /** Toast for icons rejected as duplicates. */
+  SF.reportDuplicateIcons = function (rejected) {
+    if (!rejected || !rejected.length) return;
+    var shown = rejected.slice(0, 4).map(function (r) { return '"' + r.name + '" (' + r.reason + ')'; }).join(', ');
+    var more = rejected.length > 4 ? ' and ' + (rejected.length - 4) + ' more' : '';
+    SF.showToast('Skipped ' + rejected.length + ' duplicate icon' + (rejected.length === 1 ? '' : 's') + ': ' + shown + more +
+      '. Use a different name, or replace the existing icon instead.');
+  };
+
   /** Escape HTML for safe insertion */
   SF.escapeAttr = function (str) {
     return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

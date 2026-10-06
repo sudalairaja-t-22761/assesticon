@@ -752,6 +752,7 @@
   function addImportedSvgs(results, fs) {
     var addedCount = 0;
 
+    var figmaRejected = [];
     results.forEach(function (item) {
       var comp = fs.components.find(function (c) { return c.id === item.id; });
       var name = comp ? comp.name : item.id;
@@ -765,11 +766,14 @@
 
       var icon = SF.parseSVGFile(item.svgText, finalName + '.svg');
       if (icon) {
+        var conflict = SF.iconNameConflict(icon.name);
+        if (conflict) { figmaRejected.push({ name: icon.name, reason: conflict }); return; }
         state.icons.push(icon);
         addedCount++;
       }
     });
 
+    SF.reportDuplicateIcons(figmaRejected);
     fs.selected = {};
     SF.renderFigmaGrid();
     SF.renderIconList();

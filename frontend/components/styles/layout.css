@@ -3,6 +3,7 @@
    ============================================================ */
 .main {
   flex: 1;
+  min-width: 0; /* let wide content (large icon lists) shrink instead of sliding under the right panel */
   margin-left: var(--sidebar-w);
   display: flex;
   flex-direction: column;

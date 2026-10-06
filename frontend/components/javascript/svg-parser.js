@@ -422,22 +422,27 @@
    */
   SF.parseExistingCSS = function (content) {
     var dims = {};
-    var regex = /\.([^\s{]+)\s*\{([^}]*)\}/g;
+    // Comments out first so they cannot swallow or fake a selector.
+    var src = String(content || '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    var regex = /([^{}]+)\{([^{}]*)\}/g;
     var match;
 
-    while ((match = regex.exec(content)) !== null) {
-      var className = match[1];
+    while ((match = regex.exec(src)) !== null) {
       var body = match[2];
+      // "width:" / "height:" only — not stroke-width, max-width, line-height …
+      var widthMatch = body.match(/(?:^|[;\s])width\s*:\s*([\d.]+)px/);
+      var heightMatch = body.match(/(?:^|[;\s])height\s*:\s*([\d.]+)px/);
+      if (!widthMatch && !heightMatch) continue;
 
-      var widthMatch = body.match(/width:\s*([\d.]+)px/);
-      var heightMatch = body.match(/height:\s*([\d.]+)px/);
-
-      if (widthMatch || heightMatch) {
-        dims[className] = {
+      // Grouped selectors ".a,\n.b,\n.c{…}" → every plain class gets the size.
+      match[1].split(',').forEach(function (part) {
+        var m = part.trim().match(/^\.([_a-zA-Z-][\w-]*)$/);
+        if (!m) return;
+        dims[m[1]] = {
           width: widthMatch ? parseFloat(widthMatch[1]) : null,
           height: heightMatch ? parseFloat(heightMatch[1]) : null
         };
-      }
+      });
     }
 
     return dims;

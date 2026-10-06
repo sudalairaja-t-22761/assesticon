@@ -140,6 +140,7 @@
   function _publish() {
     if (typeof SF.setRepoLibraryIcons === 'function') SF.setRepoLibraryIcons(SF.repoLib.icons);
     _renderStatus();
+    if (typeof SF.refreshSpriteSourceOptions === 'function') SF.refreshSpriteSourceOptions(); // icon counts on the cards
   }
 
   function _renderStatus() {

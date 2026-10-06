@@ -10,6 +10,11 @@
     </h3>
   </div>
   <div class="panel-body">
+    <div class="src-row">
+      <label class="src-row-label" id="spriteSourceLabel">Load SVG + CSS from</label>
+      <div class="src-dd" id="spriteSourcePicker" data-action="load" aria-labelledby="spriteSourceLabel"></div>
+    </div>
+    <p class="src-row-hint">Pick a repository sprite or a saved sprite to load its SVG and stylesheet together, or upload your own files below. Names and classes already in them cannot be added again.</p>
     <div class="upload-row">
       <div class="upload-box" id="spriteDropZone">
         <div class="upload-icon">
@@ -47,7 +52,7 @@
           <span class="upload-feature"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Maps icon names &amp; positions</span>
           <span class="upload-feature"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Optional — enhances output</span>
         </div>
-        <input type="file" accept=".css" class="file-input">
+        <input type="file" accept=".css,.less" class="file-input">
         <div class="upload-status" id="cssStatus"></div>
       </div>
     </div>

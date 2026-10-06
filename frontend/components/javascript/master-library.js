@@ -240,6 +240,7 @@
   SF.masterLibraryUrl = _url;
   SF.masterLibraryAuthHeaders = _authHeaders;
   SF.masterLibraryConfig = _cfg;
+  SF.fetchMasterLibraryFile = function (name) { return _fetchFileText(name); };
   SF.isMasterLibrarySignedOut = _isSignedOut;
 
   /**
@@ -320,40 +321,24 @@
 
   /** Load sprite + stylesheet into Update Sprite mode so icons can be added or replaced. */
   SF.editMasterLibraryPair = function (svgName, stylesName) {
-    if (!svgName) return;
+    if (!svgName) return Promise.resolve(false);
     _setBusy(true, 'Opening ' + svgName + '…');
     var jobs = [_fetchFileText(svgName)];
     if (stylesName) jobs.push(_fetchFileText(stylesName).catch(function () { return ''; }));
 
-    Promise.all(jobs).then(function (res) {
+    return Promise.all(jobs).then(function (res) {
       _setBusy(false, '');
-      var svgText = res[0] || '';
-      var cssText = res[1] || '';
-      if (!svgText) { SF.showToast('Sprite is empty'); return; }
-
-      // Switch to Update Sprite mode (existing section + generator page)
-      $('.sidebar-link[data-mode="existing"]').trigger('click');
-
-      state.masterLibrary.source = { svg: svgName, styles: stylesName || null };
-      SF.handleSpriteFile(new File([svgText], svgName, { type: 'image/svg+xml' }));
-
-      if (stylesName && cssText) {
-        // handleSpriteFile parses asynchronously; apply the stylesheet once icons exist.
-        var tries = 0;
-        (function waitForSprite() {
-          var hasExisting = (state.icons || []).some(function (i) { return i.isExisting; });
-          if (hasExisting || tries > 40) {
-            SF.handleCSSFile(new File([cssText], stylesName, { type: 'text/plain' }));
-            return;
-          }
-          tries++;
-          setTimeout(waitForSprite, 50);
-        })();
-      }
-      SF.showToast('Loaded ' + svgName + ' from ' + (_cfg().repoName || 'repository') + ' — add or replace icons, then Generate → Save to Project');
+      return !!SF.loadSpritePair({
+        svgName: svgName, svgText: res[0] || '',
+        cssName: stylesName || '', cssText: res[1] || '',
+        label: _cfg().repoName || 'repository',
+        sourceKey: 'repo:' + svgName + '|' + (stylesName || ''),
+        repoSource: { svg: svgName, styles: stylesName || null }
+      });
     }).catch(function (err) {
       _setBusy(false, '');
       SF.showToast(err.message || 'Could not open sprite');
+      return false;
     });
   };
 
@@ -423,8 +408,8 @@
         } else {
           SF.showToast('Repository push failed for ' + names + ': ' + (res.pushError || 'unknown error'));
         }
-        state.masterLibrary.source = null;
         if (typeof opts.onSuccess === 'function') opts.onSuccess(res);
+        if (typeof SF.resetSpriteWorkspace === 'function') SF.resetSpriteWorkspace();
         // The pushed sprite is now the repository version: refresh the Library icons from it.
         if (typeof SF.loadRepoLibraryIcons === 'function') SF.loadRepoLibraryIcons(true);
       },
@@ -534,7 +519,11 @@
       url: _url('api/master-library/config'),
       type: 'GET',
       dataType: 'json',
-      success: function (data) { if (data && data.success) state.masterLibrary.config = data; _renderHeader(); },
+      success: function (data) {
+        if (data && data.success) state.masterLibrary.config = data;
+        _renderHeader();
+        if (typeof SF.refreshSpriteSourceOptions === 'function') SF.refreshSpriteSourceOptions();
+      },
       error: function () { /* keep SF_REPO_CONFIG defaults */ }
     });
   });

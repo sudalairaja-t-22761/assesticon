@@ -781,15 +781,40 @@
 
     SF.renderIconList();
     if (!state.icons.length) {
-      state.generatedSVG = '';
-      state.generatedCSS = '';
-      $('#outputSection').addClass('hidden');
-      $('#spriteStatus').text('').attr('class', 'upload-status');
-      $('#cssStatus').text('').attr('class', 'upload-status');
+      if (typeof SF.resetSpriteWorkspace === 'function') {
+        SF.resetSpriteWorkspace();
+      } else {
+        state.generatedSVG = '';
+        state.generatedCSS = '';
+        $('#outputSection').addClass('hidden');
+        $('#spriteStatus').text('').attr('class', 'upload-status');
+        $('#cssStatus').text('').attr('class', 'upload-status');
+      }
     }
+    if (typeof SF.refreshSpriteSourceOptions === 'function') SF.refreshSpriteSourceOptions();
   }
 
-  function setGeneratorMode(mode) {
+  /**
+   * Switch Create Sprite ⇄ Update Sprite. Changing mode starts a fresh workspace
+   * (icons, loaded sprite/stylesheet, dropdowns, output).
+   * @param {'new'|'existing'} mode
+   * @param {{silent?:boolean, keepNewIcons?:boolean}} [opts] silent: no confirm (programmatic loads)
+   * @returns {boolean} false when the user cancelled
+   */
+  function setGeneratorMode(mode, opts) {
+    opts = opts || {};
+    if (mode !== state.mode) {
+      var count = (state.icons || []).length;
+      if (count && !opts.silent) {
+        var target = mode === 'existing' ? 'Update Sprite' : 'Create Sprite';
+        if (!window.confirm('Switch to ' + target + '? The ' + count + ' icon' + (count === 1 ? '' : 's') +
+            ' in the workspace and any loaded sprite / stylesheet will be cleared.')) {
+          return false;
+        }
+      }
+      state.mode = mode;
+      if (typeof SF.resetSpriteWorkspace === 'function') SF.resetSpriteWorkspace({ keepNewIcons: !!opts.keepNewIcons });
+    }
     state.mode = mode;
 
     $('.sidebar-link[data-mode]').removeClass('active');
@@ -810,7 +835,9 @@
     if (state.page !== 'generator') {
       SF.switchPage('generator');
     }
+    return true;
   }
+  SF.setGeneratorMode = setGeneratorMode;
 
   function init() {
     var authReady = _bootstrapAuth();
@@ -1257,6 +1284,12 @@
     });
 
     SF.setupDropZone('#svgDropZone', function (files) {
+      // A sprite dropped together with its .css/.less is merged as a whole sprite.
+      var list = Array.from(files || []);
+      if (list.some(function (f) { return /\.(css|less)$/i.test(f.name || ''); }) && typeof SF.mergeSpriteFiles === 'function') {
+        SF.mergeSpriteFiles(list);
+        return;
+      }
       SF.handleSVGFiles(files);
     });
 
@@ -1345,12 +1378,10 @@
       }
 
       if (index >= 0 && index < state.icons.length) {
-        var duplicate = state.icons.some(function (icon, i) {
-          return i !== index && icon.name === newName;
-        });
+        var duplicate = SF.iconNameConflict(newName, index);
 
         if (duplicate) {
-          alert('An icon with this name already exists');
+          alert('"' + newName + '" cannot be used: ' + duplicate);
           $(this).val(state.icons[index].name);
           return;
         }
@@ -1373,7 +1404,9 @@
       var index = parseInt($(this).attr('data-index'), 10);
       if (index >= 0 && index < state.icons.length) {
         state.icons.splice(index, 1);
-        SF.renderIconList();
+        if (!state.icons.length && typeof SF.resetSpriteWorkspace === 'function') SF.resetSpriteWorkspace();
+        else SF.renderIconList();
+        if (typeof SF.refreshSpriteSourceOptions === 'function') SF.refreshSpriteSourceOptions();
       }
     });
 
@@ -1400,11 +1433,16 @@
     });
 
     $(document).on('click', '#clearAllConfirmBtn', function () {
-      state.icons = [];
-      SF.renderIconList();
-      $('#outputSection').addClass('hidden');
-      $('#spriteStatus').text('').attr('class', 'upload-status');
-      $('#cssStatus').text('').attr('class', 'upload-status');
+      // Clear everything, including the loaded sprite/stylesheet and the dropdown choice.
+      if (typeof SF.resetSpriteWorkspace === 'function') {
+        SF.resetSpriteWorkspace();
+      } else {
+        state.icons = [];
+        SF.renderIconList();
+        $('#outputSection').addClass('hidden');
+        $('#spriteStatus').text('').attr('class', 'upload-status');
+        $('#cssStatus').text('').attr('class', 'upload-status');
+      }
       closeClearAllModal();
     });
 
@@ -1947,9 +1985,11 @@
       var $modal = $('#filenameModal');
       resetFilenameModalLayout();
       $modal.data('purpose', 'saveproject');
-      $('#fnameSprite').val(state.newSpriteBaseName || state.sourceSpriteName || 'sprite');
-      $('#fnameCss').val(state.newCssBaseName || state.sourceCssName || 'sprite');
-      $('#fnameFolder').val(state.newSpriteBaseName || state.sourceSpriteName || 'sprite-icons');
+      // Update Sprite: keep the loaded file names (sprite, stylesheet, saved folder).
+      var upd = state.mode === 'existing' && state.sourceSpriteName;
+      $('#fnameSprite').val(upd ? state.sourceSpriteName : (state.newSpriteBaseName || state.sourceSpriteName || 'sprite'));
+      $('#fnameCss').val(upd && state.sourceCssName ? state.sourceCssName : (state.newCssBaseName || state.sourceCssName || 'sprite'));
+      $('#fnameFolder').val(upd ? (state.sourceSavedFolder || state.sourceSpriteName) : (state.newSpriteBaseName || state.sourceSpriteName || 'sprite-icons'));
       $('#fnameFolderGroup').removeClass('hidden');
       if (window.sfCssPreference === false || !state.generatedCSS) {
         $('#fnameCssGroup').addClass('hidden');

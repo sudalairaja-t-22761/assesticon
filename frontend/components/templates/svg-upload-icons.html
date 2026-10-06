@@ -18,17 +18,37 @@
         </svg>
       </div>
       <p class="upload-label">Drop SVG files here or click to browse</p>
-      <p class="upload-hint">Supports multiple files &middot; .svg format only</p>
+      <p class="upload-hint">Multiple .svg icons &middot; or a whole sprite .svg with its .css / .less to merge</p>
       <div class="upload-features">
         <span class="upload-feature"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Individual SVG icons</span>
         <span class="upload-feature"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Auto-detects fill &amp; stroke</span>
         <span class="upload-feature"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Drag &amp; drop multiple files</span>
       </div>
-      <input type="file" accept=".svg,image/svg+xml" multiple class="file-input">
+      <input type="file" accept=".svg,image/svg+xml,.css,.less" multiple class="file-input">
       <div class="upload-loader">
         <div class="upload-spinner"></div>
         <span class="upload-loader-label">Processing icons…</span>
       </div>
+    </div>
+
+    <!-- Merge a whole second sprite (SVG + CSS/LESS) into this one, skipping duplicates -->
+    <div class="merge-sprite-box">
+      <div class="src-section-head">
+        <div>
+          <div class="src-section-title">Merge another sprite</div>
+          <div class="src-section-hint">Adds that sprite's icons and their CSS / LESS rules to the sprite you are updating. Names or classes that already exist are skipped.</div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="mergeFilesBtn" title="Pick one sprite .svg and its .css or .less from your computer">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Upload sprite + CSS
+        </button>
+        <input type="file" id="mergeFilesInput" accept=".svg,.css,.less" multiple hidden>
+      </div>
+      <div class="src-row">
+        <div class="src-dd" id="mergeSourcePicker" data-action="merge" aria-label="Sprite to merge"></div>
+        <button type="button" class="btn btn-primary btn-sm src-merge-btn" id="mergeSourceBtn" disabled>Merge</button>
+      </div>
+      <div class="upload-status" id="mergeStatus"></div>
     </div>
   </div>
 </div>

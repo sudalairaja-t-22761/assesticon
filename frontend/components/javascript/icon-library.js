@@ -397,27 +397,14 @@
     });
   }
 
-  function uniqueWorkspaceIconName(baseName) {
-    var base = SF.cleanFileName(baseName) || 'icon';
-    var taken = {};
-    (SF.state && SF.state.icons || []).forEach(function (icon) {
-      var n = String((icon && icon.name) || '').toLowerCase();
-      if (n) taken[n] = true;
-    });
-
-    if (!taken[base.toLowerCase()]) return base;
-
-    var i = 2;
-    while (taken[(base + '-' + i).toLowerCase()]) i++;
-    return base + '-' + i;
-  }
-
   function parseIconFromSvg(svgText, preferredName) {
     var parseName = (SF.cleanFileName(preferredName) || 'icon') + '.svg';
     var parsed = SF.parseSVGFile(svgText || '', parseName);
     if (!parsed) return null;
 
-    parsed.name = uniqueWorkspaceIconName(parsed.name || preferredName || 'icon');
+    // Duplicates are not allowed: same name / class as an icon in the sprite or stylesheet.
+    var conflict = SF.iconNameConflict(parsed.name || preferredName || 'icon');
+    if (conflict) return { conflict: conflict, name: parsed.name || preferredName };
     parsed.gId = SF.makeGId(parsed.name);
     parsed.symbolId = SF.makeSymbolId(parsed.name);
     return parsed;
@@ -439,6 +426,11 @@
       if (!parsed) {
         if (!options.silent) SF.showToast('Could not add icon to sprite');
         if (typeof done === 'function') done(false, 'parse failed');
+        return;
+      }
+      if (parsed.conflict) {
+        if (!options.silent) SF.reportDuplicateIcons([{ name: parsed.name, reason: parsed.conflict }]);
+        if (typeof done === 'function') done(false, 'duplicate', { name: parsed.name, reason: parsed.conflict });
         return;
       }
 
@@ -560,18 +552,21 @@
 
     var addedNames = [];
     var failed = 0;
+    var duplicates = [];
 
     function run(i) {
       if (i >= ids.length) {
         SF.showToast('Added ' + addedNames.length + ' icon' + (addedNames.length === 1 ? '' : 's') + ' to sprite' + (failed ? ' (' + failed + ' failed)' : ''));
+        if (duplicates.length) setTimeout(function () { SF.reportDuplicateIcons(duplicates); }, 50);
         if (addedNames.length) SF.libState.selected = {};
         SF.renderLibraryGrid();
         if (typeof done === 'function') done(addedNames.length > 0, addedNames);
         return;
       }
 
-      SF.addLibraryIconToSprite(ids[i], function (ok, msg) {
+      SF.addLibraryIconToSprite(ids[i], function (ok, msg, info) {
         if (ok) addedNames.push(msg || 'icon');
+        else if (msg === 'duplicate' && info) duplicates.push(info);
         else failed++;
         run(i + 1);
       }, { silent: true });

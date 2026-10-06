@@ -61,6 +61,7 @@
     var skipped = 0;
     var svgFiles = [];
     var addedIcons = [];
+    var rejected = [];
 
     Array.from(files).forEach(function (file) {
       if (!file.name.toLowerCase().endsWith('.svg')) {
@@ -86,6 +87,19 @@
       var reader = new FileReader();
 
       reader.onload = function (e) {
+        // A whole sprite (several <symbol>s) is merged icon-by-icon, not added as one icon.
+        if (!options.noSpriteDetect && typeof SF.mergeSpritePair === 'function' &&
+            (String(e.target.result || '').match(/<symbol\b/g) || []).length > 1) {
+          SF.mergeSpritePair({ svgName: file.name, svgText: e.target.result });
+          pending--;
+          if (pending === 0) {
+            $('#svgDropZone').removeClass('loading');
+            SF.renderIconList();
+            SF.reportDuplicateIcons(rejected);
+            if (typeof options.onComplete === 'function') options.onComplete(addedIcons);
+          }
+          return;
+        }
         var parseName = file.name;
         if (options.overrideName && total === 1) {
           parseName = options.overrideName + '.svg';
@@ -95,13 +109,18 @@
           if (options.overrideName && total === 1) {
             icon.name = SF.cleanFileName(options.overrideName);
           }
-          icon.gId = SF.makeGId(icon.name);
-          icon.symbolId = SF.makeSymbolId(icon.name);
-          state.icons.push(icon);
-          addedIcons.push(icon);
+          var conflict = SF.iconNameConflict(icon.name);
+          if (conflict) {
+            rejected.push({ name: icon.name, reason: conflict });
+          } else {
+            icon.gId = SF.makeGId(icon.name);
+            icon.symbolId = SF.makeSymbolId(icon.name);
+            state.icons.push(icon);
+            addedIcons.push(icon);
 
-          if (total === 1 && !options.skipAutoSave && typeof SF.saveSingleIconToLibraryFolder === 'function') {
-            SF.saveSingleIconToLibraryFolder(icon.name, e.target.result, options.folderName);
+            if (total === 1 && !options.skipAutoSave && typeof SF.saveSingleIconToLibraryFolder === 'function') {
+              SF.saveSingleIconToLibraryFolder(icon.name, e.target.result, options.folderName);
+            }
           }
         }
 
@@ -109,6 +128,7 @@
         if (pending === 0) {
           $('#svgDropZone').removeClass('loading');
           SF.renderIconList();
+          SF.reportDuplicateIcons(rejected);
           if (typeof options.onComplete === 'function') {
             options.onComplete(addedIcons);
           }
@@ -120,6 +140,7 @@
         if (pending === 0) {
           $('#svgDropZone').removeClass('loading');
           SF.renderIconList();
+          SF.reportDuplicateIcons(rejected);
           if (typeof options.onComplete === 'function') {
             options.onComplete(addedIcons);
           }
@@ -131,33 +152,159 @@
   };
 
   /**
+   * Fresh workspace: icons, loaded sprite + stylesheet, merged styles, output and the
+   * source dropdowns. Used when switching Create ⇄ Update, on Clear All and after a commit.
+   * @param {{keepNewIcons?:boolean}} [opts] keepNewIcons keeps icons added by hand (not from a sprite)
+   */
+  SF.resetSpriteWorkspace = function (opts) {
+    opts = opts || {};
+    state.icons = opts.keepNewIcons ? state.icons.filter(function (i) { return !i.isExisting && !i.mergedFrom; }) : [];
+    state.generatedSVG = '';
+    state.generatedCSS = '';
+    state.sourceSpriteName = '';
+    state.sourceCssName = '';
+    state.sourceCssExt = 'css';
+    state.sourceCssText = '';
+    state.sourceCssClasses = {};
+    state.sourceCssDims = {};
+    state.sourceSavedFolder = '';
+    state.originalSpriteWidth = 0;
+    state.originalSpriteHeight = 0;
+    state.newSpriteBaseName = '';
+    state.newCssBaseName = '';
+    state.mergedCssRules = [];
+    state.mergedCssVars = [];
+    if (state.masterLibrary) state.masterLibrary.source = null;
+    try { delete window.sfCssPreference; } catch (e) { window.sfCssPreference = undefined; }
+
+    $('#outputSection').addClass('hidden');
+    $('#svgoStatsBar').addClass('hidden');
+    $('#spritePreview').empty();
+    $('#svgCode, #cssCode').text('');
+    $('#spriteStatus, #cssStatus, #mergeStatus').text('').attr('class', 'upload-status');
+    $('#spriteDropZone .file-input, #cssDropZone .file-input, #svgDropZone .file-input, #mergeFilesInput').val('');
+    if (typeof SF.resetSpriteSourcePickers === 'function') SF.resetSpriteSourcePickers();
+    SF.renderIconList();
+  };
+
+  /**
+   * Load an existing sprite from its text (Update Sprite mode).
+   * Icons added earlier that clash with the sprite are dropped (duplicates are not allowed).
+   * Clears any previously loaded stylesheet — load the matching one right after.
+   * @returns {number} icons found
+   */
+  SF.loadSpriteText = function (svgText, fileName) {
+    state.sourceSpriteName = String(fileName || 'sprite').replace(/\.svg$/i, '');
+    state.sourceCssText = '';
+    state.sourceCssClasses = {};
+    state.sourceCssDims = {};
+
+    var icons = SF.parseExistingSprite(svgText || '');
+    if (!icons.length) {
+      $('#spriteStatus')
+        .text('No icons found in sprite. Check the file format.')
+        .attr('class', 'upload-status error');
+      return 0;
+    }
+
+    var pendingNew = state.icons.filter(function (i) { return !i.isExisting; });
+    state.icons = icons;
+    var rejected = [];
+    pendingNew.forEach(function (icon) {
+      var conflict = SF.iconNameConflict(icon.name);
+      if (conflict) rejected.push({ name: icon.name, reason: conflict });
+      else state.icons.push(icon);
+    });
+
+    SF.renderIconList();
+    $('#spriteStatus')
+      .text('Loaded ' + icons.length + ' icons from ' + state.sourceSpriteName + '.svg')
+      .attr('class', 'upload-status success');
+    $('#cssStatus').text('').attr('class', 'upload-status');
+    SF.reportDuplicateIcons(rejected);
+    return icons.length;
+  };
+
+  /**
+   * Load the sprite's CSS/LESS from its text. The full text is kept: on Generate the
+   * original stylesheet is preserved and only rules for new icons are appended.
+   * @returns {number} rules with width/height found
+   */
+  SF.loadStylesheetText = function (cssText, fileName) {
+    var lower = String(fileName || '').toLowerCase();
+    state.sourceCssName = String(fileName || 'sprite').replace(/\.(css|less)$/i, '');
+    state.sourceCssExt = /\.less$/.test(lower) ? 'less' : 'css';
+    state.sourceCssText = String(cssText || '');
+    state.sourceCssClasses = SF.extractStylesheetClasses(state.sourceCssText);
+
+    var dims = SF.parseExistingCSS(state.sourceCssText);
+    state.sourceCssDims = dims;
+    var updated = 0;
+    state.icons.forEach(function (icon) {
+      var d = dims[icon.symbolId];
+      if (!d || !icon.isExisting) return;
+      if (d.width !== null) { icon.width = d.width; updated++; }
+      if (d.height !== null) icon.height = d.height;
+    });
+
+    // A loaded stylesheet is always regenerated together with the sprite.
+    window.sfCssPreference = true;
+
+    var count = Object.keys(dims).length;
+    SF.renderIconList();
+    $('#cssStatus')
+      .text('Loaded ' + state.sourceCssName + '.' + state.sourceCssExt + ' — ' + count + ' size rules' + (updated > 0 ? ', matched ' + updated + ' icons' : '') +
+        '. New icons are appended; existing rules are kept.')
+      .attr('class', 'upload-status success');
+    return count;
+  };
+
+  /**
+   * Load a sprite and its stylesheet together into Update Sprite mode.
+   * @param {{svgName:string, svgText:string, cssName?:string, cssText?:string, label?:string}} pair
+   */
+  SF.loadSpritePair = function (pair) {
+    if (!pair || !pair.svgText) { SF.showToast('Sprite is empty'); return false; }
+    // Update Sprite mode + generator page. Coming from Create Sprite resets the workspace
+    // but keeps icons added by hand; they are checked for duplicates below.
+    if (typeof SF.setGeneratorMode === 'function') SF.setGeneratorMode('existing', { silent: true, keepNewIcons: true });
+    else $('.sidebar-link[data-mode="existing"]').trigger('click');
+    // Where the files came from (set after the mode switch, which clears it).
+    if (state.masterLibrary) state.masterLibrary.source = pair.repoSource || null;
+    state.sourceSavedFolder = pair.savedFolder || '';
+    state.mergedCssRules = [];
+    state.mergedCssVars = [];
+    state.icons = state.icons.filter(function (i) { return !i.mergedFrom; });
+    var n = SF.loadSpriteText(pair.svgText, pair.svgName);
+    if (!n) return false;
+    if (pair.cssText) SF.loadStylesheetText(pair.cssText, pair.cssName || (state.sourceSpriteName + '.css'));
+    state.generatedSVG = '';
+    state.generatedCSS = '';
+    $('#outputSection').addClass('hidden');
+    if (typeof SF.syncSpriteSourceSelect === 'function') SF.syncSpriteSourceSelect(pair.sourceKey || '');
+    SF.showToast('Loaded ' + pair.svgName + (pair.cssText ? ' + ' + pair.cssName : '') + (pair.label ? ' from ' + pair.label : '') +
+      ' — add or replace icons, then Generate → Save to Project');
+    return true;
+  };
+
+  /**
    * Handle uploaded existing SVG sprite file
    * @param {File} file
    */
   SF.handleSpriteFile = function (file) {
-    // Store the original filename (without extension) for update-mode downloads
-    state.sourceSpriteName = file.name.replace(/\.svg$/i, '');
-
     $('#spriteDropZone').addClass('loading');
-
     var reader = new FileReader();
     reader.onload = function (e) {
       $('#spriteDropZone').removeClass('loading');
-      var icons = SF.parseExistingSprite(e.target.result);
-
-      if (icons.length > 0) {
-        var newIcons = state.icons.filter(function (i) { return !i.isExisting; });
-        state.icons = icons.concat(newIcons);
-        SF.renderIconList();
-        $('#spriteStatus')
-          .text('Loaded ' + icons.length + ' icons from sprite')
-          .attr('class', 'upload-status success');
-      } else {
-        $('#spriteStatus')
-          .text('No icons found in sprite. Check the file format.')
-          .attr('class', 'upload-status error');
-      }
+      if (state.masterLibrary) state.masterLibrary.source = null;
+      state.sourceSavedFolder = '';
+      state.mergedCssRules = [];
+      state.mergedCssVars = [];
+      state.icons = state.icons.filter(function (i) { return !i.mergedFrom; });
+      SF.loadSpriteText(e.target.result, file.name);
+      if (typeof SF.syncSpriteSourceSelect === 'function') SF.syncSpriteSourceSelect('');
     };
+    reader.onerror = function () { $('#spriteDropZone').removeClass('loading'); };
     reader.readAsText(file);
   };
 
@@ -167,42 +314,14 @@
    */
   SF.handleCSSFile = function (file) {
     var fileName = file.name.toLowerCase();
-    // Store the original CSS/LESS filename for update-mode downloads
-    state.sourceCssName = file.name.replace(/\.(css|less)$/i, '');
-    state.sourceCssExt = fileName.endsWith('.less') ? 'less' : 'css';
-
     if (!fileName.endsWith('.css') && !fileName.endsWith('.less')) {
       $('#cssStatus')
         .text('Unsupported file type. Please upload a .css or .less file.')
         .attr('class', 'upload-status error');
       return;
     }
-
     var reader = new FileReader();
-    reader.onload = function (e) {
-      var dims = SF.parseExistingCSS(e.target.result);
-      var updated = 0;
-
-      state.icons.forEach(function (icon) {
-        if (dims[icon.symbolId]) {
-          if (dims[icon.symbolId].width !== null) {
-            icon.width = dims[icon.symbolId].width;
-            updated++;
-          }
-          if (dims[icon.symbolId].height !== null) {
-            icon.height = dims[icon.symbolId].height;
-          }
-        }
-      });
-
-      var count = Object.keys(dims).length;
-      var fileType = fileName.endsWith('.less') ? 'LESS' : 'CSS';
-      SF.renderIconList();
-
-      $('#cssStatus')
-        .text('Loaded ' + count + ' ' + fileType + ' rules' + (updated > 0 ? ', updated ' + updated + ' icons' : ''))
-        .attr('class', 'upload-status success');
-    };
+    reader.onload = function (e) { SF.loadStylesheetText(e.target.result, file.name); };
     reader.readAsText(file);
   };
 
@@ -447,6 +566,7 @@
    */
   SF.renderSavedFolders = function (folders) {
     _savedFoldersCache = Array.isArray(folders) ? folders.slice() : [];
+    if (typeof SF.refreshSpriteSourceOptions === 'function') SF.refreshSpriteSourceOptions();
     var $list = $('#savedFoldersList');
     if (!folders.length) {
       $list.html(
@@ -514,6 +634,10 @@
       });
       html += '</div>';
       html += '<div class="saved-folder-actions">';
+      html += '<button class="btn btn-primary btn-sm saved-edit-btn" data-folder="' + SF.escapeAttr(folder.name) + '" title="Open SVG + CSS in Update Sprite to add or replace icons">';
+      html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+      html += ' Add / Replace Icons';
+      html += '</button>';
       html += '<button class="btn btn-ghost btn-sm saved-download-btn" data-folder="' + folder.name + '">';
       html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
       html += ' Download';
@@ -572,6 +696,64 @@
       error: function (xhr) { if (typeof onFail === 'function') onFail(xhr); }
     });
   }
+
+  /** Saved sprite folders (last listing) — used by the Update Sprite source picker. */
+  SF.getSavedSpriteFolders = function () {
+    return (_savedFoldersCache || []).filter(function (f) { return f && f.kind !== 'icon'; });
+  };
+
+  /**
+   * Fetch a saved sprite's SVG and CSS text.
+   * @returns {Promise<{svgName, svgText, cssName, cssText}>}
+   */
+  SF.fetchSavedSpritePair = function (folderName) {
+    return new Promise(function (resolve, reject) {
+      var folder = _findFolderByName(folderName);
+      if (!folder) { reject(new Error('Saved sprite "' + folderName + '" not found')); return; }
+      var files = folder.files || [];
+      var svgFile = files.find(function (f) { return f && /\.svg$/i.test(f.name || ''); });
+      var cssFile = files.find(function (f) { return f && /\.(css|less)$/i.test(f.name || ''); });
+      var svgName = (svgFile && svgFile.name) || ((folder.name || 'sprite') + '.svg');
+      var cssName = (cssFile && cssFile.name) || '';
+
+      if (folder._ls) {
+        resolve({ svgName: svgName, svgText: folder._svgContent || folder.previewSvg || '', cssName: cssName || (folder.name + '.css'), cssText: folder._cssContent || '' });
+        return;
+      }
+      var svgUrl = folder.svgKey ? _joinUrl(CATALYST_API_BASE, 'api/get-sprite-file?key=' + encodeURIComponent(folder.svgKey)) : (folder.openPath || '');
+      var cssUrl = folder.cssKey ? _joinUrl(CATALYST_API_BASE, 'api/get-sprite-file?key=' + encodeURIComponent(folder.cssKey)) : '';
+      if (!cssName && folder.cssKey) cssName = folder.cssKey.split('/').pop();
+      if (!svgUrl) { reject(new Error('No SVG file stored for "' + folderName + '"')); return; }
+      var headers = _authHeaders();
+      _fetchText(svgUrl, function (svgText) {
+        if (!cssUrl) { resolve({ svgName: svgName, svgText: svgText, cssName: '', cssText: '' }); return; }
+        _fetchText(cssUrl, function (cssText) {
+          resolve({ svgName: svgName, svgText: svgText, cssName: cssName, cssText: cssText });
+        }, function () {
+          resolve({ svgName: svgName, svgText: svgText, cssName: '', cssText: '' });
+        }, headers);
+      }, function (xhr) {
+        if (_handleUnauthorized(xhr, 'Session expired. Sign in with Zoho to open saved sprites.')) { reject(new Error('Unauthorized')); return; }
+        reject(new Error('Could not load ' + svgName));
+      }, headers);
+    });
+  };
+
+  /** Open a saved sprite (SVG + CSS) in Update Sprite mode. */
+  /** @returns {Promise<boolean>} whether the sprite was loaded */
+  SF.editSavedSprite = function (folderName) {
+    return SF.fetchSavedSpritePair(folderName).then(function (pair) {
+      pair.label = 'Saved Sprites';
+      pair.sourceKey = 'saved:' + folderName;
+      pair.savedFolder = folderName;
+      return !!SF.loadSpritePair(pair);
+    }).catch(function (err) { SF.showToast(err.message || 'Could not open saved sprite'); return false; });
+  };
+
+  $(document).on('click', '.saved-edit-btn', function () {
+    var name = $(this).data('folder');
+    if (name) SF.editSavedSprite(String(name));
+  });
 
   SF.downloadSavedBundle = function (folderName) {
     var folder = _findFolderByName(folderName);

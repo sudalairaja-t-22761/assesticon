@@ -18,6 +18,9 @@ window.SpriteForge = window.SpriteForge || {};
     sourceSpriteName: '',    // Original sprite filename (update mode)
     sourceCssName: '',       // Original CSS/LESS filename (update mode)
     sourceCssExt: 'css',     // 'css' or 'less'
+    sourceCssText: '',       // Full original CSS/LESS text (update mode) — kept on Generate
+    sourceCssClasses: {},    // lower-cased class → class, every class in sourceCssText
+    sourceCssDims: {},       // class → {width,height} from sourceCssText
     newSpriteBaseName: '',   // User-chosen name for new sprite
     newCssBaseName: '',       // User-chosen name for new CSS file
     settings: {
