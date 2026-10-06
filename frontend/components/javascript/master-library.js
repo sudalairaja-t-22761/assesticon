@@ -1,11 +1,12 @@
 /**
  * SpriteForge - Master UI Library
  *
- * A shared, repository-backed folder (Master_ui_library) on the Saved Sprites
- * page. It mirrors the CRM_UI_LIBRARY icon files (two sprites + two LESS files)
- * and is visible to every signed-in user. Saving from the generator with the
- * "commit to repository" option stores the files in the folder and pushes a
- * commit to the configured branch.
+ * The CRM_UI_LIBRARY icon files (two sprites + two LESS files) shown on the
+ * Saved Sprites page, read DIRECTLY from the repository branch — nothing is
+ * stored in Catalyst. Visible to every signed-in user. "Sync from repo"
+ * fetches the branch tip again and refreshes the Library page icons, which are
+ * exploded from both sprites (see repo-library-icons.js). Saving from the
+ * generator with the "commit to repository" option pushes a commit.
  */
 (function (SF, $) {
   'use strict';
@@ -21,6 +22,8 @@
     missing: [],
     lastSyncAt: null,
     lastCommit: null,
+    lastCommitInfo: null,
+    error: null,
     source: null,     // { svg, styles } when the workspace was loaded from this folder
     loading: false
   };
@@ -88,11 +91,18 @@
     $('#mlFolderName').text(cfg.folder || 'Master_ui_library');
     $('#mlRepoLink').attr('href', cfg.webUrl || cfg.baseUrl || '#').text(cfg.repoName || cfg.projectPath || 'repository');
     $('#mlBranch').text(cfg.branch || '');
-    var meta = [];
-    if (ml.lastSyncAt) meta.push('Synced ' + _fmtDate(ml.lastSyncAt));
-    if (ml.lastCommit) meta.push('Commit ' + _shortSha(ml.lastCommit));
+    var meta = ['Live from repository'];
+    var info = ml.lastCommitInfo || {};
+    if (ml.lastCommit) {
+      var c = 'Commit ' + _shortSha(ml.lastCommit);
+      if (info.author) c += ' by ' + info.author;
+      if (info.date) c += ' (' + _fmtDate(info.date) + ')';
+      meta.push(c);
+    }
+    if (ml.lastSyncAt) meta.push('Fetched ' + _fmtDate(ml.lastSyncAt));
     if (cfg.configured === false) meta.push('Repository token not configured');
-    $('#mlMeta').text(meta.join(' · '));
+    if (ml.error) meta.push('Error: ' + ml.error);
+    $('#mlMeta').text(meta.join(' · ')).attr('title', info.subject || '');
   }
 
   function _fileRow(name) {
@@ -106,14 +116,14 @@
     if (e) {
       html += '<span class="saved-file-size">' + SF.formatBytes(e.size || 0) + '</span>';
     } else {
-      html += '<span class="saved-file-size">not synced</span>';
+      html += '<span class="saved-file-size">not in repo</span>';
     }
     html += '</div>';
     if (e) {
       var who = e.updatedBy && (e.updatedBy.name || e.updatedBy.email);
       var bits = [];
       if (e.updatedAt) bits.push(_fmtDate(e.updatedAt));
-      if (who && who !== 'repository') bits.push('by ' + who);
+      if (who) bits.push('by ' + who);
       if (e.commit) bits.push(_shortSha(e.commit));
       if (e.pushError) bits.push('push failed');
       html += '<div class="ml-file-meta' + (e.pushError ? ' ml-file-warn' : '') + '" title="' + _esc(e.pushError || '') + '">' + _esc(bits.join(' · ')) + '</div>';
@@ -148,7 +158,7 @@
       if (p.styles) html += _fileRow(p.styles);
       html += '</div>';
       html += '<div class="saved-folder-actions ml-actions">';
-      html += '<button class="btn btn-primary btn-sm ml-edit-btn"' + (hasSvg ? '' : ' disabled title="Sync from repository first"') + '>';
+      html += '<button class="btn btn-primary btn-sm ml-edit-btn"' + (hasSvg ? '' : ' disabled title="Not found in the repository branch"') + '>';
       html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Add / Replace Icons</button>';
       html += '<button class="btn btn-ghost btn-sm ml-view-btn" data-name="' + _esc(p.svg) + '"' + (hasSvg ? '' : ' disabled') + '>';
       html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> View</button>';
@@ -187,40 +197,60 @@
     $panel.removeClass('hidden');
     _renderHeader();
     if (!state.masterLibrary.files.length) {
-      $('#mlFilesGrid').html('<div class="saved-empty ml-loading"><p>Loading Master UI Library…</p></div>');
+      $('#mlFilesGrid').html('<div class="saved-empty ml-loading"><p>Loading files from repository…</p></div>');
     }
 
     $.ajax({
-      url: _url('api/master-library?sync=1'),
+      url: _url('api/master-library'),
       type: 'GET',
       dataType: 'json',
       headers: _authHeaders(),
-      success: function (data) {
-        if (!data || data.success === false) {
-          $('#mlFilesGrid').html('<div class="saved-empty"><p>' + _esc((data && data.message) || 'Could not load Master UI Library') + '</p></div>');
-          return;
-        }
-        state.masterLibrary.config = data.repo || state.masterLibrary.config;
-        state.masterLibrary.files = data.files || [];
-        state.masterLibrary.missing = data.missing || [];
-        state.masterLibrary.lastSyncAt = data.lastSyncAt || null;
-        state.masterLibrary.lastCommit = data.lastCommit || null;
-        _renderHeader();
-        _renderGrid();
-      },
+      success: function (data) { _applyListing(data); },
       error: function (xhr) {
         if (xhr && xhr.status === 401) {
           $panel.addClass('hidden');
           return;
         }
-        var msg = (xhr && xhr.responseJSON && xhr.responseJSON.message) || 'Could not load Master UI Library from server.';
+        var data = xhr && xhr.responseJSON;
+        if (data && data.files && data.files.length) { _applyListing(data); return; }
+        var msg = (data && data.message) || 'Could not read the repository from the server.';
+        state.masterLibrary.error = msg;
+        _renderHeader();
         $('#mlFilesGrid').html('<div class="saved-empty"><p>' + _esc(msg) + '</p></div>');
       }
     });
   };
 
-  SF.syncMasterLibrary = function () {
-    _setBusy(true, 'Pulling files from repository…');
+  /** Apply a GET /api/master-library (or /sync, /save) payload to state and re-render. */
+  function _applyListing(data) {
+    if (!data) return;
+    var ml = state.masterLibrary;
+    ml.config = data.repo || ml.config;
+    if (data.files) ml.files = data.files;
+    if (data.missing) ml.missing = data.missing;
+    if ('lastSyncAt' in data) ml.lastSyncAt = data.lastSyncAt || null;
+    if ('lastCommit' in data) ml.lastCommit = data.lastCommit || null;
+    if ('lastCommitInfo' in data) ml.lastCommitInfo = data.lastCommitInfo || null;
+    ml.error = data.success === false ? (data.message || data.error || 'Repository error') : (data.error || null);
+    _renderHeader();
+    _renderGrid();
+  }
+
+  // Shared helpers for the Library page (repo-library-icons.js).
+  SF.masterLibraryUrl = _url;
+  SF.masterLibraryAuthHeaders = _authHeaders;
+  SF.masterLibraryConfig = _cfg;
+  SF.isMasterLibrarySignedOut = _isSignedOut;
+
+  /**
+   * Fetch the latest branch tip from the repository, then refresh both this
+   * panel and the Library page icons (exploded from the sprites).
+   * @param {{onDone?:Function}} [opts]
+   */
+  SF.syncMasterLibrary = function (opts) {
+    opts = opts || {};
+    _setBusy(true, 'Pulling latest files from repository…');
+    $('#libRepoSyncBtn').prop('disabled', true).addClass('is-busy');
     $.ajax({
       url: _url('api/master-library/sync'),
       type: 'POST',
@@ -228,16 +258,30 @@
       headers: _authHeaders(),
       success: function (data) {
         _setBusy(false, '');
+        $('#libRepoSyncBtn').prop('disabled', false).removeClass('is-busy');
+        _applyListing(data);
         var n = (data && data.synced && data.synced.length) || 0;
         var miss = (data && data.missing) || [];
-        SF.showToast('Synced ' + n + ' file(s) from ' + (_cfg().repoName || 'repository') + (miss.length ? ' — missing: ' + miss.join(', ') : ''));
-        state.masterLibrary.files = [];
-        SF.loadMasterLibrary();
+        SF.showToast('Synced ' + n + ' file(s) from ' + (_cfg().repoName || 'repository') +
+          (data && data.lastCommit ? ' @ ' + _shortSha(data.lastCommit) : '') +
+          (miss.length ? ' — missing: ' + miss.join(', ') : ''));
+        if (typeof SF.loadRepoLibraryIcons === 'function') SF.loadRepoLibraryIcons(true);
+        if (typeof opts.onDone === 'function') opts.onDone(true, data);
       },
       error: function (xhr) {
         _setBusy(false, '');
-        var msg = (xhr && xhr.responseJSON && xhr.responseJSON.message) || 'Sync failed';
+        $('#libRepoSyncBtn').prop('disabled', false).removeClass('is-busy');
+        if (xhr && xhr.status === 401) {
+          if (typeof SF.handleHostedUnauthorized === 'function') SF.handleHostedUnauthorized('Session expired. Sign in with Zoho and try again.');
+          if (typeof opts.onDone === 'function') opts.onDone(false);
+          return;
+        }
+        var data = xhr && xhr.responseJSON;
+        if (data) _applyListing(data);
+        var msg = (data && data.message) || 'Sync failed';
         SF.showToast('Repository sync failed: ' + msg);
+        if (typeof SF.setRepoLibraryError === 'function') SF.setRepoLibraryError(msg);
+        if (typeof opts.onDone === 'function') opts.onDone(false, data);
       }
     });
   };
@@ -306,7 +350,7 @@
           setTimeout(waitForSprite, 50);
         })();
       }
-      SF.showToast('Loaded ' + svgName + ' from ' + (_cfg().folder || 'Master_ui_library') + ' — add or replace icons, then Generate → Save to Project');
+      SF.showToast('Loaded ' + svgName + ' from ' + (_cfg().repoName || 'repository') + ' — add or replace icons, then Generate → Save to Project');
     }).catch(function (err) {
       _setBusy(false, '');
       SF.showToast(err.message || 'Could not open sprite');
@@ -356,7 +400,7 @@
   SF.saveToMasterLibrary = function (files, message, opts) {
     opts = opts || {};
     if (!files || !files.length) { SF.showToast('Nothing to save'); return; }
-    SF.showToast('Saving to ' + (_cfg().folder || 'Master_ui_library') + ' and committing…');
+    SF.showToast('Committing to ' + (_cfg().repoName || 'repository') + ' (' + (_cfg().branch || '') + ')…');
 
     $.ajax({
       url: _url('api/master-library/save'),
@@ -370,19 +414,19 @@
           SF.showToast('Save failed: ' + ((res && res.message) || 'unknown error'));
           return;
         }
-        state.masterLibrary.files = res.files || state.masterLibrary.files;
-        state.masterLibrary.lastCommit = res.lastCommit || res.commit || state.masterLibrary.lastCommit;
+        _applyListing(res);
         var names = (res.stored || []).join(', ');
         if (res.pushed) {
           SF.showToast('Saved ' + names + ' and pushed commit ' + _shortSha(res.commit) + ' to ' + res.branch);
         } else if (res.changed === false && !res.pushError) {
           SF.showToast('Saved ' + names + ' — repository already up to date');
         } else {
-          SF.showToast('Saved ' + names + ' to folder, but repository push failed: ' + (res.pushError || 'unknown error'));
+          SF.showToast('Repository push failed for ' + names + ': ' + (res.pushError || 'unknown error'));
         }
         state.masterLibrary.source = null;
         if (typeof opts.onSuccess === 'function') opts.onSuccess(res);
-        SF.loadMasterLibrary();
+        // The pushed sprite is now the repository version: refresh the Library icons from it.
+        if (typeof SF.loadRepoLibraryIcons === 'function') SF.loadRepoLibraryIcons(true);
       },
       error: function (xhr) {
         if (xhr && xhr.status === 401) {
@@ -390,7 +434,7 @@
           return;
         }
         var msg = (xhr && xhr.responseJSON && xhr.responseJSON.message) || 'Server error';
-        SF.showToast('Save to Master UI Library failed: ' + msg);
+        SF.showToast('Commit to repository failed: ' + msg);
       }
     });
   };
@@ -448,7 +492,7 @@
     // File names are fixed by the repository when committing.
     $('#fnameSpriteGroup, #fnameCssGroup, #fnameFolderGroup').toggleClass('ml-dimmed', on);
     $('#fnameRepoHint').text(on
-      ? 'Files are written to ' + (_cfg().folder || 'Master_ui_library') + ' and committed to branch ' + (_cfg().branch || '') + '. Names above are ignored.'
+      ? 'Files are committed and pushed directly to ' + (_cfg().repoName || 'the repository') + ' branch ' + (_cfg().branch || '') + '. Names above are ignored.'
       : '');
   }
 
@@ -469,7 +513,7 @@
   $(document)
     .on('click', '#mlSyncBtn', function () { SF.syncMasterLibrary(); })
     .on('click', '#mlTestBtn', function () { SF.testMasterLibraryConnection(); })
-    .on('click', '#mlRefreshBtn', function () { state.masterLibrary.files = []; SF.loadMasterLibrary(); })
+    .on('click', '#mlRefreshBtn', function () { SF.loadMasterLibrary(); })
     .on('click', '.ml-edit-btn', function () {
       var $card = $(this).closest('.ml-card');
       SF.editMasterLibraryPair($card.data('svg'), $card.data('styles') || null);

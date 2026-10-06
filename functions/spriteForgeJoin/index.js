@@ -681,17 +681,14 @@ function localSpRead()  { try { return JSON.parse(fs.readFileSync(LOCAL_SP_INDEX
 function localSpWrite(idx) { fs.mkdirSync(LOCAL_SP_DIR, { recursive: true }); fs.writeFileSync(LOCAL_SP_INDEX, JSON.stringify(idx, null, 2)); }
 
 // ===================================
-// MASTER UI LIBRARY — repository-backed shared folder (Master_ui_library)
-// Mirrors CRM_UI_LIBRARY icon files (2 sprites + 2 LESS) into Stratus/local,
-// visible to every signed-in user; saves are committed + pushed to REPO_BRANCH.
+// MASTER UI LIBRARY — CRM_UI_LIBRARY icon files read DIRECTLY from the repository
+// (2 sprites + 2 LESS), cached in memory only — nothing is stored in Stratus.
+// Visible to every signed-in user; saves are committed + pushed to REPO_BRANCH.
 // Config: REPO_* / MASTER_LIBRARY_* env vars (see .env.example).
 // Routes: /api/master-library/{config,sync,file,save,test-connection}
 // ===================================
 const { createMasterLibraryRouter } = require("./routes/master-library");
 app.use("/api/master-library", createMasterLibraryRouter({
-    useStratus: shouldUseStratus,
-    stratusPut,
-    stratusGet,
     getSession,
     requireSession
 }));
@@ -1853,6 +1850,6 @@ if (require.main === module) {
                 : `bucket → ${process.env.STRATUS_BUCKET_NAME || '(not set)'}`
         }`);
         console.log(`[local] Auth enforce: ${process.env.AUTH_ENFORCE || 'false'}`);
-        console.log(`[local] Master UI Library: ${process.env.MASTER_LIBRARY_FOLDER || 'Master_ui_library'} ← ${process.env.REPO_NAME || 'CRM_UI_LIBRARY'}@${process.env.REPO_BRANCH || 'CRM_UI_LIBRARY_ICON_TOOL'} via ${process.env.REPO_PROVIDER || 'git'} (token ${process.env.REPO_TOKEN ? 'set' : 'NOT set'})`);
+        console.log(`[local] Master UI Library (direct from repo): ${process.env.REPO_NAME || 'CRM_UI_LIBRARY'}@${process.env.REPO_BRANCH || 'CRM_UI_LIBRARY_ICON_TOOL'} via ${process.env.REPO_PROVIDER || 'git'} (token ${process.env.REPO_TOKEN ? 'set' : 'NOT set'})`);
     });
 }

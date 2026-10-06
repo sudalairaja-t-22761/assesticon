@@ -1,28 +1,28 @@
 "use strict";
 
 /**
- * Master UI Library routes
+ * Master UI Library routes — served DIRECTLY from the repository.
  *
- * A single shared folder (default name: Master_ui_library) that mirrors the
- * CRM_UI_LIBRARY icon files from the repository:
+ * The CRM_UI_LIBRARY icon files
  *
  *   crmutil_icons.svg, svg_cssicons.svg, svg-icons.less, svg-path.less
  *
- * The folder lives in Stratus (or local disk in dev) exactly like saved
- * sprites, is visible to every signed-in user, and every save is committed
- * and pushed to the configured repository branch.
+ * are read from the configured repository branch and kept only in an
+ * in-memory cache (plus the git client's scratch clone in os.tmpdir()).
+ * Nothing is copied into Catalyst Stratus / File Store: the repository is the
+ * single source of truth. "Sync" re-fetches the branch tip and replaces the
+ * cache; "Save" commits + pushes and then updates the cache with what was
+ * pushed.
  *
  * Routes (all under /api/master-library):
  *   GET  /config           → public repo config (no token)
- *   GET  /                 → folder listing (index); ?sync=1 pulls from repo when empty
- *   POST /sync             → pull all files from the repository into the folder
- *   GET  /file?name=x.svg  → raw file content
- *   POST /save             → { files:[{name, content}], message } → store + commit + push
+ *   GET  /                 → file listing; ?refresh=1 (or legacy ?sync=1 when empty) re-fetches the repo
+ *   POST /sync             → fetch the latest branch tip from the repository
+ *   GET  /file?name=x.svg  → raw file content (from the repository cache)
+ *   POST /save             → { files:[{name, content}], message } → commit + push
  *   POST /test-connection  → verify token / branch
  */
 
-const fs   = require("fs");
-const os   = require("os");
 const path = require("path");
 const express = require("express");
 
@@ -31,9 +31,6 @@ const { createRepoClient } = require("../lib/repo-client");
 
 /**
  * @param {object} deps
- * @param {(req)=>boolean}                deps.useStratus
- * @param {(req,key,buf,ct)=>Promise}     deps.stratusPut
- * @param {(req,key)=>Promise<Buffer>}    deps.stratusGet
  * @param {(req)=>{session}|null}         deps.getSession
  * @param {(req,res,next)=>void}          deps.requireSession
  */
@@ -41,86 +38,94 @@ function createMasterLibraryRouter(deps) {
     const router = express.Router();
     const cfg    = repoConfig.load();
     const client = createRepoClient(cfg);
-
-    const LOCAL_DIR = path.join(os.tmpdir(), "svgforge-master", cfg.folder);
-    const indexKey  = `${cfg.folder}/_index.json`;
-    const fileKey   = (name) => `${cfg.folder}/${name}`;
-    const byName    = new Map(cfg.files.map((f) => [f.name, f]));
+    const byName = new Map(cfg.files.map((f) => [f.name, f]));
 
     const contentType = (name) => {
-        if (/\.svg$/i.test(name))  return "image/svg+xml";
-        if (/\.less$/i.test(name)) return "text/x-less";
-        if (/\.css$/i.test(name))  return "text/css";
+        if (/\.svg$/i.test(name))  return "image/svg+xml; charset=utf-8";
+        if (/\.less$/i.test(name)) return "text/x-less; charset=utf-8";
+        if (/\.css$/i.test(name))  return "text/css; charset=utf-8";
         return "application/octet-stream";
     };
 
-    // ── storage (Stratus or local disk) ────────────────────────────────────
-    async function put(req, key, buf, ct) {
-        if (deps.useStratus(req)) return deps.stratusPut(req, key, buf, ct);
-        const abs = path.join(LOCAL_DIR, path.posix.basename(key));
-        fs.mkdirSync(LOCAL_DIR, { recursive: true });
-        fs.writeFileSync(abs, buf);
+    // ── in-memory repository cache ─────────────────────────────────────────
+    // files: name → { content: Buffer, commit, updatedAt, updatedBy, source, pushError? }
+    const cache = { files: new Map(), missing: [], commit: null, commitInfo: null, fetchedAt: null, error: null };
+    let inflight = null;
+
+    function notConfigured() {
+        return Object.assign(new Error("Repository token (REPO_TOKEN) is not configured on the server"), { status: 503 });
     }
-    async function get(req, key) {
-        if (deps.useStratus(req)) return deps.stratusGet(req, key);
-        const abs = path.join(LOCAL_DIR, path.posix.basename(key));
-        if (!fs.existsSync(abs)) throw new Error(`Not found: ${key}`);
-        return fs.readFileSync(abs);
+
+    /** Fetch every configured file from the repository branch tip. Concurrent callers share one fetch. */
+    function fetchFromRepo() {
+        if (!cfg.isConfigured) return Promise.reject(notConfigured());
+        if (inflight) return inflight;
+        inflight = (async () => {
+            try {
+                const results = await client.readFiles(cfg.files.map((f) => f.repoPath));
+                const now = new Date().toISOString();
+                const files = new Map();
+                const missing = [];
+                let info = null;
+                let commit = null;
+                for (const r of results) {
+                    const meta = cfg.files.find((f) => f.repoPath === r.repoPath);
+                    if (!meta) continue;
+                    if (r.commit) commit = r.commit;
+                    if (r.commitInfo) info = r.commitInfo;
+                    if (r.missing || !r.content) { missing.push(meta.name); continue; }
+                    files.set(meta.name, { content: r.content, commit: r.commit || null, updatedAt: now, updatedBy: null, source: "repo" });
+                }
+                cache.files = files;
+                cache.missing = missing;
+                cache.commit = commit;
+                cache.commitInfo = info;
+                cache.fetchedAt = now;
+                cache.error = null;
+                return cache;
+            } catch (e) {
+                cache.error = e.message;
+                throw e;
+            } finally {
+                inflight = null;
+            }
+        })();
+        return inflight;
     }
-    async function readIndex(req) {
-        try { return JSON.parse((await get(req, indexKey)).toString("utf8")); }
-        catch (_) { return { folder: cfg.folder, files: [], lastSyncAt: null, lastCommit: null }; }
+
+    async function ensureLoaded(force) {
+        if (force || !cache.fetchedAt) await fetchFromRepo();
+        return cache;
     }
-    async function writeIndex(req, idx) {
-        await put(req, indexKey, Buffer.from(JSON.stringify(idx, null, 2), "utf8"), "application/json");
-    }
-    function upsertEntry(idx, entry) {
-        idx.files = (idx.files || []).filter((e) => e.name !== entry.name);
-        idx.files.push(entry);
-        // Keep the configured order so the UI is stable.
-        const order = cfg.files.map((f) => f.name);
-        idx.files.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
-    }
+
     function userOf(req) {
         const cur = deps.getSession(req);
         const u = cur && cur.session && cur.session.user;
         return u ? { name: u.name || "", email: u.email || "" } : null;
     }
-    function decorate(idx) {
+
+    function listing() {
+        const files = cfg.files
+            .filter((f) => cache.files.has(f.name))
+            .map((f) => {
+                const e = cache.files.get(f.name);
+                return {
+                    name: f.name, repoPath: f.repoPath, kind: f.kind, ext: f.ext, webUrl: f.webUrl,
+                    size: e.content.length, commit: e.commit, updatedAt: e.updatedAt,
+                    updatedBy: e.updatedBy, source: e.source, pushError: e.pushError || null
+                };
+            });
         return {
             folder: cfg.folder,
+            source: "repository",
             repo: repoConfig.publicConfig(cfg),
-            lastSyncAt: idx.lastSyncAt || null,
-            lastCommit: idx.lastCommit || null,
-            files: (idx.files || []).map((e) => ({ ...e, webUrl: (byName.get(e.name) || {}).webUrl || null, key: fileKey(e.name) })),
-            missing: cfg.files.filter((f) => !(idx.files || []).some((e) => e.name === f.name)).map((f) => f.name)
+            lastSyncAt: cache.fetchedAt,
+            lastCommit: cache.commit,
+            lastCommitInfo: cache.commitInfo,
+            files,
+            missing: cfg.files.filter((f) => !cache.files.has(f.name)).map((f) => f.name),
+            error: cache.error
         };
-    }
-
-    // ── pull from repository ───────────────────────────────────────────────
-    async function syncFromRepo(req) {
-        if (!cfg.isConfigured) throw Object.assign(new Error("Repository token (REPO_TOKEN) is not configured"), { status: 503 });
-        const results = await client.readFiles(cfg.files.map((f) => f.repoPath));
-        const idx = await readIndex(req);
-        const now = new Date().toISOString();
-        const synced = [];
-        const missing = [];
-        for (const r of results) {
-            const meta = cfg.files.find((f) => f.repoPath === r.repoPath);
-            if (!meta) continue;
-            if (r.missing || !r.content) { missing.push(meta.name); continue; }
-            await put(req, fileKey(meta.name), r.content, contentType(meta.name));
-            upsertEntry(idx, {
-                name: meta.name, repoPath: meta.repoPath, kind: meta.kind, ext: meta.ext,
-                size: r.content.length, updatedAt: now, updatedBy: { name: "repository", email: "" },
-                commit: r.commit || null, source: "repo"
-            });
-            synced.push(meta.name);
-            if (r.commit) idx.lastCommit = r.commit;
-        }
-        idx.lastSyncAt = now;
-        await writeIndex(req, idx);
-        return { synced, missing, index: idx };
     }
 
     // ── auth gate ──────────────────────────────────────────────────────────
@@ -132,27 +137,25 @@ function createMasterLibraryRouter(deps) {
     });
 
     router.get("/", gate, async (req, res) => {
+        const force = String(req.query.refresh || "") === "1";
         try {
-            let idx = await readIndex(req);
-            const wantSync = String(req.query.sync || "") === "1";
-            if (wantSync && (!idx.files || idx.files.length < cfg.files.length) && cfg.isConfigured) {
-                try { idx = (await syncFromRepo(req)).index; }
-                catch (e) { console.warn("[master-library] auto-sync failed:", e.message); }
-            }
-            res.json({ success: true, ...decorate(idx) });
+            await ensureLoaded(force);
+            res.json({ success: true, ...listing() });
         } catch (err) {
-            console.error("[master-library] list", err);
-            res.status(500).json({ success: false, message: err.message });
+            console.error("[master-library] list:", err.message);
+            // Still answer with whatever is cached so the UI can show the error next to stale data.
+            res.status(err.status || 502).json({ success: false, message: err.message, ...listing() });
         }
     });
 
     router.post("/sync", gate, async (req, res) => {
         try {
-            const r = await syncFromRepo(req);
-            res.json({ success: true, synced: r.synced, missing: r.missing, ...decorate(r.index) });
+            await fetchFromRepo();
+            const l = listing();
+            res.json({ success: true, synced: l.files.map((f) => f.name), ...l });
         } catch (err) {
-            console.error("[master-library] sync", err.message);
-            res.status(err.status || 502).json({ success: false, message: err.message });
+            console.error("[master-library] sync:", err.message);
+            res.status(err.status || 502).json({ success: false, message: err.message, ...listing() });
         }
     });
 
@@ -162,17 +165,23 @@ function createMasterLibraryRouter(deps) {
             return res.status(400).json({ success: false, message: `Unknown file. Allowed: ${[...byName.keys()].join(", ")}` });
         }
         try {
-            const buf = await get(req, fileKey(name));
-            res.setHeader("Content-Type", contentType(name));
-            res.setHeader("Cache-Control", "no-store");
-            res.send(buf);
+            await ensureLoaded(false);
         } catch (err) {
-            res.status(404).json({ success: false, message: `${name} is not in ${cfg.folder} yet — run Sync from repository first` });
+            return res.status(err.status || 502).json({ success: false, message: err.message });
         }
+        const entry = cache.files.get(name);
+        if (!entry) {
+            return res.status(404).json({ success: false, message: `${name} was not found in ${cfg.repoName}@${cfg.branch} (${byName.get(name).repoPath})` });
+        }
+        res.setHeader("Content-Type", contentType(name));
+        res.setHeader("Cache-Control", "no-store");
+        if (entry.commit) res.setHeader("X-Repo-Commit", entry.commit);
+        res.send(entry.content);
     });
 
     router.post("/save", gate, async (req, res) => {
         try {
+            if (!cfg.isConfigured) throw notConfigured();
             const body  = req.body || {};
             const files = Array.isArray(body.files) ? body.files : [];
             if (!files.length) return res.status(400).json({ success: false, message: "No files supplied" });
@@ -187,60 +196,43 @@ function createMasterLibraryRouter(deps) {
             }
 
             const user = userOf(req) || { name: "SpriteForge user", email: "" };
-            const now  = new Date().toISOString();
-            const idx  = await readIndex(req);
-
-            // 1) Always store in the shared folder first.
-            for (const p of prepared) {
-                await put(req, fileKey(p.meta.name), p.buf, contentType(p.meta.name));
-            }
-
-            // 2) Commit + push to the repository.
-            let repoResult = null;
-            let pushError  = null;
-            if (cfg.isConfigured) {
-                try {
-                    repoResult = await client.writeFiles(
-                        prepared.map((p) => ({ repoPath: p.meta.repoPath, content: p.buf })),
-                        {
-                            message: body.message || `Update ${prepared.map((p) => p.meta.name).join(", ")} via SpriteForge (${user.name || user.email})`,
-                            authorName:  user.name  || cfg.authorName,
-                            authorEmail: user.email || cfg.authorEmail
-                        }
-                    );
-                } catch (e) {
-                    pushError = e.message;
-                    console.error("[master-library] push failed:", e.message);
+            const repoResult = await client.writeFiles(
+                prepared.map((p) => ({ repoPath: p.meta.repoPath, content: p.buf })),
+                {
+                    message: body.message || `Update ${prepared.map((p) => p.meta.name).join(", ")} via SpriteForge (${user.name || user.email})`,
+                    authorName:  user.name  || cfg.authorName,
+                    authorEmail: user.email || cfg.authorEmail
                 }
-            } else {
-                pushError = "REPO_TOKEN is not configured — stored in folder only";
-            }
+            );
 
+            // The repository now holds exactly what was pushed — mirror it in the cache.
+            const now = new Date().toISOString();
             for (const p of prepared) {
-                upsertEntry(idx, {
-                    name: p.meta.name, repoPath: p.meta.repoPath, kind: p.meta.kind, ext: p.meta.ext,
-                    size: p.buf.length, updatedAt: now, updatedBy: user,
-                    commit: (repoResult && repoResult.commit) || null, source: "tool",
-                    pushed: !!(repoResult && repoResult.pushed), pushError: pushError || null
+                cache.files.set(p.meta.name, {
+                    content: p.buf, commit: repoResult.commit || null, updatedAt: now,
+                    updatedBy: user, source: "tool"
                 });
             }
-            if (repoResult && repoResult.commit) idx.lastCommit = repoResult.commit;
-            await writeIndex(req, idx);
+            if (repoResult.commit) {
+                cache.commit = repoResult.commit;
+                if (repoResult.changed) cache.commitInfo = { sha: repoResult.commit, date: now, author: user.name || user.email || cfg.authorName, subject: repoResult.message };
+            }
+            if (!cache.fetchedAt) cache.fetchedAt = now;
 
             res.json({
                 success: true,
                 stored: prepared.map((p) => p.meta.name),
-                pushed: !!(repoResult && repoResult.pushed),
-                changed: repoResult ? repoResult.changed : false,
-                commit: (repoResult && repoResult.commit) || null,
+                pushed: !!repoResult.pushed,
+                changed: !!repoResult.changed,
+                commit: repoResult.commit || null,
                 branch: cfg.branch,
-                commitMessage: repoResult && repoResult.message,
-                pushError,
-                ...decorate(idx)
+                commitMessage: repoResult.message,
+                pushError: null,
+                ...listing()
             });
         } catch (err) {
-            console.error("[master-library] save", err);
-            res.status(500).json({ success: false, message: err.message });
+            console.error("[master-library] save:", err.message);
+            res.status(err.status || 502).json({ success: false, message: err.message, pushError: err.message });
         }
     });
 

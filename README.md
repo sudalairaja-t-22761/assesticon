@@ -212,11 +212,12 @@ Browser
 
 ---
 
-## Master UI Library (CRM_UI_LIBRARY repository sync)
+## Master UI Library (CRM_UI_LIBRARY repository)
 
-The **Saved Sprites** page has a shared folder, **`Master_ui_library`**, that mirrors the
+The **Saved Sprites** page has a shared panel, **`Master_ui_library`**, that shows the
 icon files of the `CRM_UI_LIBRARY` repository on ZohoRepository and is visible to **every
-signed-in user** (hidden while signed out):
+signed-in user** (hidden while signed out). The files are read **directly from the
+repository** and only cached in server memory; nothing is copied into Catalyst Stratus.
 
 | File | Path in repository (root = CRM_UI_LIBRARY) |
 |------|-----------------|
@@ -227,13 +228,16 @@ signed-in user** (hidden while signed out):
 
 **Flow**
 
-1. **Sync from repo** pulls the four files from branch `REPO_BRANCH` into the folder
-   (Stratus in Catalyst, local disk in dev).
-2. **Add / Replace Icons** on a card opens that sprite + its LESS file in *Update Sprite* mode.
-3. Add or replace icons, **Generate**, then **Save to Project** and keep the
-   *"Save to Master_ui_library and commit to CRM_UI_LIBRARY"* option ticked.
-   The files are written to the folder and a commit is pushed to the branch with the
-   signed-in user as author.
+1. **Sync from repo** fetches the latest tip of branch `REPO_BRANCH` and refreshes both
+   the Master UI Library panel and the **Icon Library** page.
+2. The **Icon Library** page splits both sprites (`crmutil_icons.svg` and
+   `svg_cssicons.svg`) into single SVG icons automatically. A filter row switches between
+   *All*, each sprite and *My icons*. Repository icons are read-only there, but can be
+   added to the current sprite or a webfont. The Library has its own **Sync from repo** button.
+3. **Add / Replace Icons** on a card opens that sprite + its LESS file in *Update Sprite* mode.
+4. Add or replace icons, **Generate**, then **Save to Project** and keep the
+   *"Commit directly to CRM_UI_LIBRARY"* option ticked. A commit is pushed to the branch
+   with the signed-in user as author, and the Library icons refresh from it.
 
 **Configuration** — `functions/spriteForgeJoin/.env` (local) / `.env.production` or the
 Catalyst Console environment variables (see `.env.example`):
@@ -260,10 +264,10 @@ served from `GET /api/master-library/config` (token excluded).
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET  | `/config` | Public repo config (no auth) |
-| GET  | `/?sync=1` | Folder index; pulls from repo when empty |
-| POST | `/sync` | Pull all files from the repository |
-| GET  | `/file?name=crmutil_icons.svg` | Raw file |
-| POST | `/save` | `{ files:[{name,content}], message }` → store + commit + push |
+| GET  | `/` | File listing with last commit; `?refresh=1` re-fetches the repo |
+| POST | `/sync` | Fetch the latest branch tip from the repository |
+| GET  | `/file?name=crmutil_icons.svg` | Raw file from the repository (`X-Repo-Commit` header) |
+| POST | `/save` | `{ files:[{name,content}], message }` → commit + push |
 | POST | `/test-connection` | Verify token and branch |
 
 The default provider uses the `git` binary (sparse, shallow clone cached in the OS temp

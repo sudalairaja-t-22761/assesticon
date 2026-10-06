@@ -981,3 +981,56 @@
   gap: 4px;
   grid-column: 1 / -1;
 }
+/* ── Library: repository sprite icons ───────────────────────────── */
+.lib-repo-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.lib-repo-bar .lib-repo-status {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.lib-repo-bar .lib-repo-status-error { color: var(--danger); }
+.lib-repo-bar #libRepoSyncBtn.is-busy svg { animation: lib-spin 0.9s linear infinite; }
+@keyframes lib-spin { to { transform: rotate(360deg); } }
+
+.lib-source-filter {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.lib-source-filter:empty { display: none; }
+.lib-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.lib-source-chip:hover { background: var(--bg-hover); }
+.lib-source-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+}
+.lib-source-count {
+  font-size: 11px;
+  opacity: 0.75;
+}
+.lib-card-repo .library-delete-btn:disabled { opacity: 0.35; }

@@ -14,7 +14,7 @@
  *
  * All providers expose the same interface:
  *   client.test()                         → { ok, provider, detail }
- *   client.readFiles(repoPaths)           → [{ repoPath, content (Buffer), commit }]
+ *   client.readFiles(repoPaths)           → [{ repoPath, content (Buffer), commit, commitInfo? }]
  *   client.writeFiles(files, opts)        → { changed, commit, branch, pushed }
  *       files: [{ repoPath, content (Buffer|string) }]
  *       opts:  { message, authorName, authorEmail }
@@ -138,6 +138,15 @@ function createGitProvider(cfg) {
         try { return (await git(["rev-parse", "HEAD"])).stdout.trim(); } catch (_) { return null; }
     }
 
+    /** Sha, date, author and subject of the checked-out tip (works on a depth-1 clone). */
+    async function headInfo() {
+        try {
+            const out = (await git(["log", "-1", "--format=%H%x00%cI%x00%an%x00%s"])).stdout.trim();
+            const [sha, date, author, subject] = out.split("\0");
+            return sha ? { sha, date: date || null, author: author || null, subject: subject || null } : null;
+        } catch (_) { return null; }
+    }
+
     return {
         provider: "git",
 
@@ -164,15 +173,16 @@ function createGitProvider(cfg) {
         readFiles(paths) {
             return mutex(async () => {
                 await syncToRemote();
-                const commit = await headCommit();
+                const info = await headInfo();
+                const commit = info ? info.sha : await headCommit();
                 const out = [];
                 for (const repoPath of paths) {
                     const abs = path.join(workDir, repoPath);
                     if (!fs.existsSync(abs)) {
-                        out.push({ repoPath, content: null, commit, missing: true });
+                        out.push({ repoPath, content: null, commit, commitInfo: info, missing: true });
                         continue;
                     }
-                    out.push({ repoPath, content: fs.readFileSync(abs), commit });
+                    out.push({ repoPath, content: fs.readFileSync(abs), commit, commitInfo: info });
                 }
                 return out;
             });

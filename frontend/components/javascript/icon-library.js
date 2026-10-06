@@ -27,11 +27,57 @@
   var AUTH_STORAGE_KEY = window.SF_AUTH_STORAGE_KEY || 'sf_session_id';
 
   SF.libState = {
-    icons: [],
+    icons: [],        // combined list: repository sprite icons + user Library icons
+    userIcons: [],    // uploaded Library icons (server + localStorage)
+    repoIcons: [],    // exploded from the repository sprites (repo-library-icons.js)
+    sourceFilter: 'all', // 'all' | 'mine' | '<sprite base name>'
     search: '',
     selected: {},
     authBlocked: false
   };
+
+  function rebuildLibraryIcons() {
+    SF.libState.icons = (SF.libState.repoIcons || []).concat(SF.libState.userIcons || []);
+    pruneSelected();
+  }
+
+  /** Called by repo-library-icons.js whenever the repository sprites are (re)loaded. */
+  SF.setRepoLibraryIcons = function (icons) {
+    SF.libState.repoIcons = Array.isArray(icons) ? icons : [];
+    var f = SF.libState.sourceFilter;
+    if (f !== 'all' && f !== 'mine' && !SF.libState.repoIcons.some(function (i) { return i.sprite === f; })) {
+      SF.libState.sourceFilter = 'all';
+    }
+    rebuildLibraryIcons();
+    SF.renderLibraryGrid();
+  };
+
+  SF.setLibrarySourceFilter = function (filter) {
+    SF.libState.sourceFilter = filter || 'all';
+    try { localStorage.setItem('sf_lib_source_filter', SF.libState.sourceFilter); } catch (e) {}
+    SF.renderLibraryGrid();
+  };
+  try { SF.libState.sourceFilter = localStorage.getItem('sf_lib_source_filter') || 'all'; } catch (e) {}
+
+  function matchesSource(icon) {
+    var f = SF.libState.sourceFilter || 'all';
+    if (f === 'all') return true;
+    if (f === 'mine') return icon.source !== 'repo';
+    return icon.source === 'repo' && icon.sprite === f;
+  }
+
+  function matchesSearch(icon, search) {
+    if (!search) return true;
+    return String(icon.name || '').toLowerCase().indexOf(search) !== -1 ||
+      (icon.source === 'repo' && String(icon.symbolId || '').toLowerCase().indexOf(search) !== -1);
+  }
+
+  function visibleLibraryIcons() {
+    var search = (SF.libState.search || '').toLowerCase();
+    return (SF.libState.icons || []).filter(function (icon) {
+      return icon && matchesSource(icon) && matchesSearch(icon, search);
+    });
+  }
 
   function selectedIds() {
     return Object.keys(SF.libState.selected || {}).filter(function (id) {
@@ -477,14 +523,19 @@
     var next = typeof forceState === 'boolean' ? forceState : !SF.libState.selected[iconId];
     if (next) SF.libState.selected[iconId] = true;
     else delete SF.libState.selected[iconId];
-    SF.renderLibraryGrid();
+    // Update just this card — re-rendering hundreds of repository icons per click is slow.
+    var $card = $('#libGrid .lib-card').filter(function () { return $(this).data('iconId') === iconId; });
+    if ($card.length) {
+      $card.toggleClass('lib-selected', next);
+      $card.find('.library-select-checkbox').prop('checked', next);
+      updateLibrarySelectionUi(visibleLibraryIcons());
+    } else {
+      SF.renderLibraryGrid();
+    }
   };
 
   SF.setLibrarySelectionForVisible = function (checked) {
-    var search = (SF.libState.search || '').toLowerCase();
-    var visible = (SF.libState.icons || []).filter(function (icon) {
-      return !search || String(icon.name || '').toLowerCase().indexOf(search) !== -1;
-    });
+    var visible = visibleLibraryIcons();
     if (!SF.libState.selected) SF.libState.selected = {};
     visible.forEach(function (icon) {
       if (!icon || !icon.id) return;
@@ -725,8 +776,8 @@
         var localIcons = buildLocalIconList().filter(function (li) {
           return !serverIcons.some(function (si) { return si.name === li.name; });
         });
-        SF.libState.icons = serverIcons.concat(localIcons);
-        pruneSelected();
+        SF.libState.userIcons = serverIcons.concat(localIcons);
+        rebuildLibraryIcons();
         SF.renderLibraryGrid();
       },
       error: function (xhr) {
@@ -736,12 +787,32 @@
           SF.libState.authBlocked = false;
         }
         // Fallback to localStorage-only
-        SF.libState.icons = buildLocalIconList();
-        pruneSelected();
+        SF.libState.userIcons = buildLocalIconList();
+        rebuildLibraryIcons();
         SF.renderLibraryGrid();
       }
     });
+
+    // Both repository sprites, split into single icons (read straight from the repo).
+    if (typeof SF.loadRepoLibraryIcons === 'function') SF.loadRepoLibraryIcons(false);
   };
+
+  function renderSourceFilter() {
+    var $bar = $('#libSourceFilter');
+    if (!$bar.length) return;
+    var all = SF.libState.icons || [];
+    var mine = all.filter(function (i) { return i.source !== 'repo'; }).length;
+    var sprites = typeof SF.repoLibrarySprites === 'function' ? SF.repoLibrarySprites() : [];
+    var cur = SF.libState.sourceFilter || 'all';
+    var chips = [{ key: 'all', label: 'All', count: all.length }];
+    sprites.forEach(function (sp) { chips.push({ key: sp.base, label: sp.base, count: sp.count, repo: true }); });
+    chips.push({ key: 'mine', label: 'My icons', count: mine });
+    $bar.html(chips.map(function (c) {
+      return '<button type="button" class="lib-source-chip' + (c.key === cur ? ' active' : '') + (c.repo ? ' lib-source-repo' : '') +
+        '" data-source="' + SF.escapeAttr(c.key) + '">' + SF.escapeAttr(c.label) +
+        ' <span class="lib-source-count">' + c.count + '</span></button>';
+    }).join(''));
+  }
 
   SF.renderLibraryGrid = function () {
     var $grid = $('#libGrid');
@@ -750,12 +821,9 @@
     $grid.addClass('lib-grid-icononly');
     $grid.empty();
 
-    var search = (SF.libState.search || '').toLowerCase();
-    var visible = (SF.libState.icons || []).filter(function (icon) {
-      return !search || String(icon.name || '').toLowerCase().indexOf(search) !== -1;
-    });
-
     pruneSelected();
+    renderSourceFilter();
+    var visible = visibleLibraryIcons();
 
     $('#libIconCount').text(visible.length);
     updateLibrarySelectionUi(visible);
@@ -763,7 +831,9 @@
     if (!visible.length) {
       var emptyMessage = SF.libState.authBlocked
         ? 'Sign in with Zoho to load Library icons'
-        : 'No icons match your search';
+        : (SF.repoLib && SF.repoLib.loading && !(SF.libState.icons || []).length
+          ? 'Loading icons from repository…'
+          : ((SF.libState.search || '') ? 'No icons match your search' : 'No icons here yet'));
       $grid.append(
         '<div class="lib-empty">' +
           '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
@@ -775,20 +845,25 @@
       return;
     }
 
-    visible.forEach(function (icon) {
-      // local: inline data-URI; library/server (local dev): direct URL works; hosted: lazy-load
-      var previewSrc = icon.source === 'local'
-        ? svgToDataUri(icon.svgContent || '')
+    var html = '';
+    var lazyHosted = [];
+    visible.forEach(function (icon, index) {
+      // inline content (local / repository): data-URI; library/server (local dev): direct URL; hosted: lazy-load
+      var previewSrc = icon.svgContent
+        ? svgToDataUri(icon.svgContent)
         : (isHostedMode() ? '' : (icon.openPath || ''));
+      if (!icon.svgContent && isHostedMode()) lazyHosted.push(index);
       var isSelected = !!(SF.libState.selected && SF.libState.selected[icon.id]);
+      var isRepo = icon.source === 'repo';
+      var title = icon.name + (isRepo ? ' — ' + icon.sprite + '.svg (repository, read-only)' : '');
 
-      var cardHtml = '<div class="lib-card lib-select-card' + (isSelected ? ' lib-selected' : '') + '" data-icon-id="' + SF.escapeAttr(icon.id) + '">' +
+      var cardHtml = '<div class="lib-card lib-select-card' + (isSelected ? ' lib-selected' : '') + (isRepo ? ' lib-card-repo' : '') + '" data-icon-id="' + SF.escapeAttr(icon.id) + '" title="' + SF.escapeAttr(title) + '">' +
         '<label class="library-select-toggle" title="Select icon">' +
           '<input type="checkbox" class="library-select-checkbox" data-icon-id="' + SF.escapeAttr(icon.id) + '"' + (isSelected ? ' checked' : '') + '>' +
           '<span></span>' +
         '</label>' +
         '<div class="lib-card-preview">' +
-          '<img alt="' + SF.escapeAttr(icon.name) + ' preview" src="' + SF.escapeAttr(previewSrc) + '">' +
+          '<img alt="' + SF.escapeAttr(icon.name) + ' preview" loading="lazy" decoding="async" src="' + SF.escapeAttr(previewSrc) + '">' +
         '</div>' +
         '<div class="saved-folder-actions lib-icon-actions">' +
           '<button class="btn btn-ghost btn-sm library-add-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-tooltip="Add to Sprite" aria-label="Add to Sprite">' +
@@ -797,22 +872,28 @@
           '<button class="btn btn-ghost btn-sm library-open-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-open-path="' + SF.escapeAttr(icon.openPath || '') + '" data-tooltip="View" aria-label="View">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>' +
           '</button>' +
-          '<button class="btn btn-ghost btn-sm library-delete-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-icon-name="' + SF.escapeAttr(icon.name) + '" style="color:var(--danger);" data-tooltip="Delete" aria-label="Delete"' + (icon.canDelete === false ? ' disabled' : '') + '>' +
+          '<button class="btn btn-ghost btn-sm library-delete-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-icon-name="' + SF.escapeAttr(icon.name) + '" style="color:var(--danger);" data-tooltip="' + (icon.canDelete === false ? 'Managed in repository' : 'Delete') + '" aria-label="Delete"' + (icon.canDelete === false ? ' disabled' : '') + '>' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
           '</button>' +
         '</div>' +
       '</div>';
 
-      $grid.append(cardHtml);
-
-      if (icon.source !== 'local') {
-        var $previewImg = $grid.find('.lib-card').last().find('.lib-card-preview img').first();
-        if (isHostedMode()) {
-          loadHostedPreviewSvg(icon, $previewImg);
-        }
-      }
+      html += cardHtml;
     });
+
+    // One DOM write for the whole grid (repository sprites add hundreds of cards).
+    $grid.html(html);
+    if (lazyHosted.length) {
+      var $cards = $grid.children('.lib-card');
+      lazyHosted.forEach(function (index) {
+        loadHostedPreviewSvg(visible[index], $cards.eq(index).find('.lib-card-preview img').first());
+      });
+    }
   };
+
+  $(document).on('click', '.lib-source-chip', function () {
+    SF.setLibrarySourceFilter($(this).data('source'));
+  });
 
   // Kept for backward compatibility with previous app flow.
   SF.updateLibSelectedCount = function () {};
