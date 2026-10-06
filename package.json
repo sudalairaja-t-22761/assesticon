@@ -4,7 +4,7 @@
   "description": "SVG Sprite Generator — Icon Manager (local dev)",
   "scripts": {
     "dev:frontend": "node frontend/server.js",
-    "dev:backend": "FORCE_LOCAL_ENV=true node functions/spriteForgeJoin/index.js",
+    "dev:backend": "FORCE_LOCAL_ENV=true node --watch --watch-path=functions/spriteForgeJoin/.env functions/spriteForgeJoin/index.js",
     "dev": "npm run dev:backend & npm run dev:frontend"
   },
   "engines": {

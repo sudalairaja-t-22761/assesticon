@@ -1,4 +1,45 @@
 <div id="savedSpritesPage" class="page-section hidden">
+
+  <!-- ===== MASTER UI LIBRARY (repository-backed shared folder, signed-in users only) ===== -->
+  <div class="panel ml-panel hidden" id="masterLibraryPanel">
+    <div class="panel-header">
+      <h3 class="panel-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          <line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/>
+        </svg>
+        <span id="mlFolderName">Master_ui_library</span>
+        <span class="ml-shared-badge" title="Shared with every signed-in user">Shared</span>
+        <span class="panel-chevron"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></span>
+      </h3>
+      <div class="panel-actions">
+        <span class="ml-status hidden" id="mlStatus"></span>
+        <button class="btn btn-ghost btn-sm" id="mlTestBtn" title="Verify the repository token and branch">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          Test
+        </button>
+        <button class="btn btn-ghost btn-sm" id="mlSyncBtn" title="Pull the latest files from the repository branch">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 12 17 8 13 12"/><line x1="17" y1="8" x2="17" y2="20"/><polyline points="3 12 7 16 11 12"/><line x1="7" y1="16" x2="7" y2="4"/></svg>
+          Sync from repo
+        </button>
+        <button class="btn btn-ghost btn-sm" id="mlRefreshBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div class="ml-repo-line">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        <a id="mlRepoLink" href="#" target="_blank" rel="noopener">CRM_UI_LIBRARY</a>
+        <span class="ml-branch-badge" id="mlBranch"></span>
+        <span class="ml-meta" id="mlMeta"></span>
+      </div>
+      <div id="mlFilesGrid" class="saved-folders-grid ml-grid"></div>
+    </div>
+  </div>
+
+  <!-- ===== PERSONAL SAVED SPRITES ===== -->
   <div class="panel">
     <div class="panel-header">
       <h3 class="panel-title">

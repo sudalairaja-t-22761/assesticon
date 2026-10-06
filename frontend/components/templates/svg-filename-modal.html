@@ -24,6 +24,29 @@
         <label for="fnameFolder">Folder name</label>
         <input type="text" id="fnameFolder" value="sprite-icons" class="form-input" placeholder="e.g. my-sprite-folder" autocomplete="off" spellcheck="false">
       </div>
+
+      <!-- Repository commit option (Save to Project only, signed-in users) -->
+      <div class="form-group hidden ml-repo-group" id="fnameRepoGroup">
+        <label class="checkbox-label">
+          <input type="checkbox" id="fnameRepoCommit">
+          <span>Save to <strong id="fnameRepoFolder">Master_ui_library</strong> and commit to <strong id="fnameRepoName">CRM_UI_LIBRARY</strong> <span class="ml-branch-badge" id="fnameRepoBranch"></span></span>
+        </label>
+        <div id="fnameRepoFields" class="hidden">
+          <div class="form-group" style="margin-top:10px;">
+            <label for="fnameRepoSvg">Sprite file in repository</label>
+            <select id="fnameRepoSvg" class="form-input"></select>
+          </div>
+          <div class="form-group" id="fnameRepoLessGroup" style="margin-top:10px;">
+            <label for="fnameRepoLess">Stylesheet file in repository</label>
+            <select id="fnameRepoLess" class="form-input"></select>
+          </div>
+          <div class="form-group" style="margin-top:10px;">
+            <label for="fnameRepoMessage">Commit message</label>
+            <input type="text" id="fnameRepoMessage" class="form-input" placeholder="Update icons via SpriteForge" autocomplete="off">
+          </div>
+          <p class="form-hint" id="fnameRepoHint"></p>
+        </div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" id="fnameCancel">Cancel</button>

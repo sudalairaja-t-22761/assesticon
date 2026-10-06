@@ -134,6 +134,7 @@
         $('.main').removeClass('has-right-panel');
       }
       SF.loadSavedFolders();
+      if (typeof SF.loadMasterLibrary === 'function') SF.loadMasterLibrary();
     } else if (page === 'webfont') {
       $('.content').first().addClass('hidden');
       $('#helpDocPage').addClass('hidden');

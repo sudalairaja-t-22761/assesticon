@@ -268,3 +268,109 @@
   color: var(--text-tertiary);
   line-height: 1.6;
 }
+
+/* ── Master UI Library (repository-backed shared folder) ─────────────────── */
+.ml-panel {
+  margin-bottom: 16px;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.ml-shared-badge,
+.ml-branch-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  line-height: 16px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.ml-shared-badge {
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  margin-left: 6px;
+}
+
+.ml-branch-badge {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  border: 1px solid var(--border-light);
+}
+
+.ml-branch-badge:empty { display: none; }
+
+.ml-repo-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ml-repo-line svg { stroke: var(--text-tertiary); flex-shrink: 0; }
+
+.ml-repo-line a {
+  color: var(--accent-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ml-repo-line a:hover { text-decoration: underline; }
+
+.ml-meta {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.ml-status {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
+.ml-card-icon { background: var(--accent); }
+.ml-card-icon svg { stroke: var(--text-on-accent); }
+
+.ml-file-missing { opacity: 0.55; }
+
+.ml-file-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  padding: 0 10px 4px 31px;
+  margin-top: -4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ml-file-warn { color: var(--warning); }
+
+.ml-actions .btn { flex: 1 1 calc(50% - 4px); }
+.ml-actions .ml-edit-btn { flex: 1 1 100%; }
+.ml-actions a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+
+/* Filename modal — repository option */
+.ml-repo-group {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+
+.ml-repo-group .checkbox-label span { line-height: 1.5; }
+
+.ml-dimmed { opacity: 0.45; pointer-events: none; }
+
+select.form-input {
+  appearance: auto;
+  -webkit-appearance: menulist;
+}

@@ -7,7 +7,7 @@
 
   class SvgSavedSprites extends HTMLElement {
     connectedCallback() {
-      fetch('components/templates/svg-saved-sprites.html')
+      fetch('components/templates/svg-saved-sprites.html?v=2')
         .then(function (r) { return r.text(); })
         .then(function (html) {
           this.innerHTML = html;

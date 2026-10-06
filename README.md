@@ -210,6 +210,66 @@ Browser
 
 ---
 
+---
+
+## Master UI Library (CRM_UI_LIBRARY repository sync)
+
+The **Saved Sprites** page has a shared folder, **`Master_ui_library`**, that mirrors the
+icon files of the `CRM_UI_LIBRARY` repository on ZohoRepository and is visible to **every
+signed-in user** (hidden while signed out):
+
+| File | Path in repository (root = CRM_UI_LIBRARY) |
+|------|-----------------|
+| `crmutil_icons.svg` | `resources/images/crmutil_icons.svg` |
+| `svg_cssicons.svg`  | `resources/images/svg_cssicons.svg` |
+| `svg-icons.less`    | `resources/icon-styles/svg-icons.less` |
+| `svg-path.less`     | `resources/icon-styles/svg-path.less` |
+
+**Flow**
+
+1. **Sync from repo** pulls the four files from branch `REPO_BRANCH` into the folder
+   (Stratus in Catalyst, local disk in dev).
+2. **Add / Replace Icons** on a card opens that sprite + its LESS file in *Update Sprite* mode.
+3. Add or replace icons, **Generate**, then **Save to Project** and keep the
+   *"Save to Master_ui_library and commit to CRM_UI_LIBRARY"* option ticked.
+   The files are written to the folder and a commit is pushed to the branch with the
+   signed-in user as author.
+
+**Configuration** — `functions/spriteForgeJoin/.env` (local) / `.env.production` or the
+Catalyst Console environment variables (see `.env.example`):
+
+```
+REPO_BASE_URL=https://repository.zohocorpcloud.in
+REPO_PROJECT_PATH=zohocorp/CRM/CRM_UI/CRM_UI_LIBRARY
+REPO_NAME=CRM_UI_LIBRARY
+REPO_BRANCH=CRM_UI_LIBRARY_ICON_TOOL
+REPO_GIT_URL=https://zrepository.zohocorpcloud.in/zohocorp/CRM/CRM_UI/CRM_UI_LIBRARY.git
+REPO_TOKEN=<personal access token>     # never commit this
+REPO_TOKEN_USER=oauth2                 # username paired with the token (basic auth)
+REPO_PROVIDER=git                      # git | gitlab | gitea | github
+MASTER_LIBRARY_FOLDER=Master_ui_library
+MASTER_LIBRARY_REQUIRE_LOGIN=true
+```
+
+The browser-side display defaults (repo name, branch, links, file pairing) live in
+`frontend/config.js` → `SF_REPO_CONFIG`; the server config is the source of truth and is
+served from `GET /api/master-library/config` (token excluded).
+
+**API** (`/api/master-library`, session required unless `MASTER_LIBRARY_REQUIRE_LOGIN=false`)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET  | `/config` | Public repo config (no auth) |
+| GET  | `/?sync=1` | Folder index; pulls from repo when empty |
+| POST | `/sync` | Pull all files from the repository |
+| GET  | `/file?name=crmutil_icons.svg` | Raw file |
+| POST | `/save` | `{ files:[{name,content}], message }` → store + commit + push |
+| POST | `/test-connection` | Verify token and branch |
+
+The default provider uses the `git` binary (sparse, shallow clone cached in the OS temp
+dir; machine-wide git hooks are disabled for its commits). If the runtime has no `git`
+(e.g. some serverless images), set `REPO_PROVIDER` to a REST dialect the host supports.
+
 ## License
 
 MIT

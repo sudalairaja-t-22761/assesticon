@@ -141,6 +141,7 @@
     // Refresh saved pages to show/hide login prompt based on new auth state
     if (typeof SF.loadSavedFolders === 'function') SF.loadSavedFolders();
     if (typeof SF.loadSavedWebFonts === 'function') SF.loadSavedWebFonts();
+    if (typeof SF.loadMasterLibrary === 'function') SF.loadMasterLibrary();
   }
 
   function _authFetch(path, options) {
@@ -518,8 +519,10 @@
   }
 
   function resetFilenameModalLayout() {
-    $('#fnameSpriteGroup, #fnameCssGroup').removeClass('hidden');
-    $('#fnameFolderGroup').addClass('hidden');
+    $('#fnameSpriteGroup, #fnameCssGroup').removeClass('hidden').removeClass('ml-dimmed');
+    $('#fnameFolderGroup').addClass('hidden').removeClass('ml-dimmed');
+    $('#fnameRepoGroup').addClass('hidden');
+    $('#fnameRepoCommit').prop('checked', false);
     $('#filenameModal .modal-header h3').html(
       '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
         '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>' +
@@ -1645,6 +1648,26 @@
         folderName = folderName.replace(/[^a-zA-Z0-9_.-]/g, '_');
         var ext = state.sourceCssExt || 'css';
         var shouldIncludeCss = window.sfCssPreference !== false && !!state.generatedCSS;
+
+        // Repository option: write to Master_ui_library + commit/push to CRM_UI_LIBRARY
+        var repoSel = typeof SF.readRepoCommitSelection === 'function' ? SF.readRepoCommitSelection() : null;
+        if (repoSel && repoSel.svg) {
+          var repoFiles = [{ name: repoSel.svg, content: state.generatedSVG }];
+          if (shouldIncludeCss && repoSel.styles) repoFiles.push({ name: repoSel.styles, content: state.generatedCSS });
+          SF.saveToMasterLibrary(repoFiles, repoSel.message, {
+            onSuccess: function () {
+              state.icons = [];
+              state.generatedSVG = '';
+              state.generatedCSS = '';
+              SF.renderIconList();
+              $('#outputSection').addClass('hidden');
+              $('#spriteStatus').text('').attr('class', 'upload-status');
+              $('#cssStatus').text('').attr('class', 'upload-status');
+            }
+          });
+          resetFilenameModalLayout();
+          return;
+        }
         
         // For Add Sprite flow, check if CSS is needed
         if (!shouldIncludeCss) {
@@ -1931,6 +1954,7 @@
       if (window.sfCssPreference === false || !state.generatedCSS) {
         $('#fnameCssGroup').addClass('hidden');
       }
+      if (typeof SF.prepareRepoCommitGroup === 'function') SF.prepareRepoCommitGroup();
       $modal.removeClass('hidden');
       setTimeout(function () {
         $('#fnameFolder').trigger('focus').trigger('select');
@@ -2435,6 +2459,9 @@
       }
       if (typeof SF.loadSavedFolders === 'function') {
         SF.loadSavedFolders();
+      }
+      if (typeof SF.loadMasterLibrary === 'function') {
+        SF.loadMasterLibrary();
       }
       if (typeof SF.loadSavedWebFonts === 'function') {
         SF.loadSavedWebFonts();
