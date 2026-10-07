@@ -746,6 +746,22 @@
   overflow: visible;
 }
 
+/* Library: the repo bar, search and select/add buttons stay put; only the icon grid scrolls. */
+#libBrowseSection > .panel-body {
+  display: flex;
+  flex-direction: column;
+  height: max(420px, calc(100vh - 260px));
+  overflow: hidden;
+}
+#libBrowseSection > .panel-body > :not(#libGrid) { flex: 0 0 auto; }
+#libBrowseSection #libGrid {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  padding: 2px 6px 2px 2px;
+}
+
 /* Icon grid */
 .lib-grid {
   display: grid;

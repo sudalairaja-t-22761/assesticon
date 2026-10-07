@@ -40,4 +40,20 @@
             { svg: 'svg_cssicons.svg',  styles: 'svg-path.less' }
         ]
     };
+
+    // ── Library icon repo (Iconassest / Sprite) ───────────────────────────────
+    // A SEPARATE repository from the one above: the Library page lists the icons of its
+    // Sprite/crmutil_icons.svg. Server settings: ICON_REPO_* in the function's .env.
+    var iconProject = 'zohocorp/user/sudalairaja.t/Iconassest';
+    var iconBranch  = 'default';
+    var iconName    = 'Iconassest';
+    var iconUrl = function (p) { return repoBase + '/' + iconProject + '#/source/' + iconBranch + '/' + iconName + '/' + p; };
+    window.SF_ICON_REPO_CONFIG = {
+        baseUrl:     repoBase,
+        projectPath: iconProject,
+        repoName:    iconName,
+        branch:      iconBranch,
+        webUrl:      repoBase + '/' + iconProject + '#/source/' + iconBranch + '/' + iconName + '/Sprite',
+        files: [{ name: 'crmutil_icons.svg', repoPath: 'Sprite/crmutil_icons.svg', ext: 'svg', kind: 'sprite', webUrl: iconUrl('Sprite/crmutil_icons.svg') }]
+    };
 }());

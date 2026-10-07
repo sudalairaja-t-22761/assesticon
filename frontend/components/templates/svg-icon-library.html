@@ -50,11 +50,16 @@
       </h3>
     </div>
     <div class="panel-body">
-      <!-- Repository sprites (crmutil_icons + svg_cssicons) split into single icons, read directly from the repo -->
+      <!-- Iconassest repo sprite (Sprite/crmutil_icons.svg) split into single icons, read directly from the repo -->
       <div class="lib-repo-bar" id="libRepoBar">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
         <span class="lib-repo-status" id="libRepoStatus">Repository icons</span>
-        <button class="btn btn-ghost btn-sm" id="libRepoSyncBtn" type="button" title="Fetch the latest crmutil_icons.svg and svg_cssicons.svg from the repository and refresh the Library">
+        <button class="btn btn-ghost btn-sm" id="libAddIconBtn" type="button" title="Add SVG icon(s) to Sprite/crmutil_icons.svg after the last icon, without overlapping, and commit to the Iconassest repository">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add icon
+        </button>
+        <input type="file" id="libAddIconInput" accept=".svg,image/svg+xml" multiple hidden>
+        <button class="btn btn-ghost btn-sm" id="libRepoSyncBtn" type="button" title="Fetch the latest Sprite/crmutil_icons.svg from the Iconassest repository and refresh the Library">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           Sync from repo
         </button>

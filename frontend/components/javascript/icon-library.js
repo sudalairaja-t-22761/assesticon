@@ -37,7 +37,8 @@
   };
 
   function rebuildLibraryIcons() {
-    SF.libState.icons = (SF.libState.repoIcons || []).concat(SF.libState.userIcons || []);
+    // The Library shows only the icons of the Iconassest repo sprite (uploaded/local icons are not listed).
+    SF.libState.icons = (SF.libState.repoIcons || []).slice();
     pruneSelected();
   }
 
@@ -618,38 +619,25 @@
       .attr('class', 'upload-status error');
   };
 
+  /**
+   * Add one icon to the Library = append it to the Iconassest repo sprite and commit.
+   * The icon goes after the last existing icon without overlap; the rest of the sprite is
+   * not changed and an icon whose name is already there is not added again.
+   */
   SF.saveSingleIconToLibrary = function (iconName, svgContent, options) {
     options = options || {};
     var safeIconName = SF.cleanFileName(iconName) || 'icon';
-
-    // Use the new unified library endpoint (works in both local dev and hosted)
-    $.ajax({
-      url: joinUrl(CATALYST_API_BASE, 'api/library/upload'),
-      type: 'POST',
-      headers: hostedAuthHeaders(),
-      contentType: 'application/json',
-      dataType: 'json',
-      data: JSON.stringify({ iconName: safeIconName, svgContent: svgContent || '' }),
-      success: function (res) {
-        if (res && res.success) {
-          SF.showToast('Saved "' + safeIconName + '" to Library');
-          SF.loadLibraryFolders();
-          if (typeof options.onSuccess === 'function') options.onSuccess(res);
-        } else {
-          var msg = (res && res.message) || 'could not save icon to Library';
-          SF.showToast('Save failed: ' + msg);
-          if (typeof options.onError === 'function') options.onError(msg);
-        }
-      },
-      error: function (xhr, status, err) {
-        if (handleHostedUnauthorized(xhr, 'Session expired while saving to library. Sign in and try again.')) {
-          if (typeof options.onError === 'function') options.onError('Unauthorized');
-          return;
-        }
-        var apiError = (xhr && xhr.responseJSON && (xhr.responseJSON.message || xhr.responseJSON.error))
-          || (xhr && xhr.responseText) || err || status || 'could not save icon to Library';
-        SF.showToast('Save failed: ' + apiError);
-        if (typeof options.onError === 'function') options.onError(apiError);
+    if (typeof SF.addItemsToIconRepo !== 'function') {
+      SF.showToast('Save failed: icon repository is not available');
+      if (typeof options.onError === 'function') options.onError('unavailable');
+      return;
+    }
+    SF.addItemsToIconRepo([{ name: safeIconName, text: svgContent || '' }], true).then(function (res) {
+      if (res.ok) {
+        if (!res.added.length) SF.showToast('"' + safeIconName + '" is already in the Library');
+        if (typeof options.onSuccess === 'function') options.onSuccess(res);
+      } else if (typeof options.onError === 'function') {
+        options.onError(res.error || 'could not add icon to the Library');
       }
     });
   };
@@ -796,12 +784,11 @@
     var $bar = $('#libSourceFilter');
     if (!$bar.length) return;
     var all = SF.libState.icons || [];
-    var mine = all.filter(function (i) { return i.source !== 'repo'; }).length;
     var sprites = typeof SF.repoLibrarySprites === 'function' ? SF.repoLibrarySprites() : [];
     var cur = SF.libState.sourceFilter || 'all';
     var chips = [{ key: 'all', label: 'All', count: all.length }];
     sprites.forEach(function (sp) { chips.push({ key: sp.base, label: sp.base, count: sp.count, repo: true }); });
-    chips.push({ key: 'mine', label: 'My icons', count: mine });
+    $bar.toggleClass('hidden', sprites.length <= 1);
     $bar.html(chips.map(function (c) {
       return '<button type="button" class="lib-source-chip' + (c.key === cur ? ' active' : '') + (c.repo ? ' lib-source-repo' : '') +
         '" data-source="' + SF.escapeAttr(c.key) + '">' + SF.escapeAttr(c.label) +

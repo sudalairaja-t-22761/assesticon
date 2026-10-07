@@ -51,30 +51,49 @@ const DEFAULT_PAIRS = [
     "svg_cssicons.svg:svg-path.less"
 ];
 
-function load() {
-    const baseUrl     = str("REPO_BASE_URL", DEFAULT_BASE_URL).replace(/\/+$/, "");
-    const projectPath = str("REPO_PROJECT_PATH", DEFAULT_PROJECT_PATH).replace(/^\/+|\/+$/g, "");
-    const repoName    = str("REPO_NAME", DEFAULT_REPO_NAME);
-    const branch      = str("REPO_BRANCH", DEFAULT_BRANCH);
-    const gitUrl      = str("REPO_GIT_URL", `${str("REPO_GIT_HOST", DEFAULT_GIT_HOST).replace(/\/+$/, "")}/${projectPath}.git`);
-    const token       = str("REPO_TOKEN", "");
-    const tokenUser   = str("REPO_TOKEN_USER", "oauth2");
-    const provider    = str("REPO_PROVIDER", "git").toLowerCase(); // git | gitlab | gitea | github
-    const files       = list("REPO_FILES", DEFAULT_FILES);
-    const pairs       = list("REPO_SPRITE_PAIRS", DEFAULT_PAIRS);
-    const folder      = str("MASTER_LIBRARY_FOLDER", DEFAULT_FOLDER);
-    const requireLogin = bool("MASTER_LIBRARY_REQUIRE_LOGIN", true);
-    const webBlobTemplate = str("REPO_WEB_BLOB_URL", "{base}/{project}#/blob/{branch}/{repo}/{path}");
-    const webBranchTemplate = str("REPO_WEB_BRANCH_URL", "{base}/{project}#/tree/{branch}");
-    const authorName  = str("REPO_COMMIT_AUTHOR_NAME", "SpriteForge Icon Tool");
-    const authorEmail = str("REPO_COMMIT_AUTHOR_EMAIL", "spriteforge@zohocorp.com");
+/**
+ * Second repository: the Library's icon repo (Iconassest, folder "Sprite"). It is separate from
+ * the CRM_UI_LIBRARY settings above and is configured with ICON_REPO_* variables.
+ */
+const ICON_DEFAULTS = {
+    projectPath: "zohocorp/user/sudalairaja.t/Iconassest",
+    repoName:    "Iconassest",
+    branch:      "default",
+    folder:      "Icon_library",
+    files:       ["Sprite/crmutil_icons.svg"],
+    pairs:       ["crmutil_icons.svg"],
+    blobTemplate:   "{base}/{project}#/source/{branch}/{repo}/{path}",
+    branchTemplate: "{base}/{project}#/source/{branch}/{repo}"
+};
+
+function load(opts) {
+    opts = opts || {};
+    const P = opts.prefix || "REPO_";
+    const D = opts.defaults || {};
+    const env = (k) => str(P + k, "");
+    const baseUrl     = str(P + "BASE_URL", DEFAULT_BASE_URL).replace(/\/+$/, "");
+    const projectPath = str(P + "PROJECT_PATH", D.projectPath || DEFAULT_PROJECT_PATH).replace(/^\/+|\/+$/g, "");
+    const repoName    = str(P + "NAME", D.repoName || DEFAULT_REPO_NAME);
+    const branch      = str(P + "BRANCH", D.branch || DEFAULT_BRANCH);
+    const gitUrl      = str(P + "GIT_URL", `${str(P + "GIT_HOST", DEFAULT_GIT_HOST).replace(/\/+$/, "")}/${projectPath}.git`);
+    const token       = str(P + "TOKEN", opts.tokenFallback ? str(opts.tokenFallback, "") : "");
+    const tokenUser   = str(P + "TOKEN_USER", "oauth2");
+    const provider    = str(P + "PROVIDER", "git").toLowerCase(); // git | gitlab | gitea | github
+    const files       = list(P + "FILES", D.files || DEFAULT_FILES);
+    const pairs       = list(P + "SPRITE_PAIRS", D.pairs || DEFAULT_PAIRS);
+    const folder      = str(P === "REPO_" ? "MASTER_LIBRARY_FOLDER" : P + "FOLDER", D.folder || DEFAULT_FOLDER);
+    const requireLogin = bool(P === "REPO_" ? "MASTER_LIBRARY_REQUIRE_LOGIN" : P + "REQUIRE_LOGIN", true);
+    const webBlobTemplate = str(P + "WEB_BLOB_URL", D.blobTemplate || "{base}/{project}#/blob/{branch}/{repo}/{path}");
+    const webBranchTemplate = str(P + "WEB_BRANCH_URL", D.branchTemplate || "{base}/{project}#/tree/{branch}");
+    const authorName  = str(P + "COMMIT_AUTHOR_NAME", "SpriteForge Icon Tool");
+    const authorEmail = str(P + "COMMIT_AUTHOR_EMAIL", "spriteforge@zohocorp.com");
     // Per network round-trip limit for the git client, and the overall limit a request waits
     // for the repository before answering with an error (keep it under the platform timeout).
     // Who may commit to the repository (the push itself uses the shared REPO_TOKEN).
     // Comma separated: emails (a@zohocorp.com), domains (@zohocorp.com) or * for every signed-in user.
-    const commitUsers = list("REPO_COMMIT_USERS", ["*"]).map((x) => x.toLowerCase());
-    const httpTimeoutMs = Math.max(3000, parseInt(str("REPO_HTTP_TIMEOUT_MS", "20000"), 10) || 20000);
-    const requestTimeoutMs = Math.max(5000, parseInt(str("REPO_REQUEST_TIMEOUT_MS", "25000"), 10) || 25000);
+    const commitUsers = list(P + "COMMIT_USERS", ["*"]).map((x) => x.toLowerCase());
+    const httpTimeoutMs = Math.max(3000, parseInt(str(P + "HTTP_TIMEOUT_MS", "20000"), 10) || 20000);
+    const requestTimeoutMs = Math.max(5000, parseInt(str(P + "REQUEST_TIMEOUT_MS", "25000"), 10) || 25000);
 
     const fileEntries = files.map((repoPath) => {
         const name = path.posix.basename(repoPath);
@@ -153,4 +172,9 @@ function publicConfig(cfg) {
     };
 }
 
-module.exports = { load, publicConfig, canCommit, DEFAULT_FILES, DEFAULT_PAIRS };
+/** Config of the Library icon repo (ICON_REPO_*; token falls back to REPO_TOKEN). */
+function loadIconRepo() {
+    return load({ prefix: "ICON_REPO_", defaults: ICON_DEFAULTS, tokenFallback: "REPO_TOKEN" });
+}
+
+module.exports = { load, loadIconRepo, publicConfig, canCommit, DEFAULT_FILES, DEFAULT_PAIRS };

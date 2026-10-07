@@ -1464,6 +1464,8 @@
 
       var svgCode = SF.generateSVGSprite();
       var cssCode = window.sfCssPreference !== false ? SF.generateCSS() : '';
+      // Add the new icons to the Library repo sprite (last position, no duplicates, no regeneration).
+      if (typeof SF.autoAddIconsToIconRepo === 'function') SF.autoAddIconsToIconRepo(state.icons);
 
       // Apply SVGO optimization
       var rawSvg = svgCode;

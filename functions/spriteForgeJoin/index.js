@@ -693,6 +693,17 @@ app.use("/api/master-library", createMasterLibraryRouter({
     requireSession
 }));
 
+// Second repository: the Library page's icon repo (Iconassest / Sprite), configured with
+// ICON_REPO_* variables. Same routes as above under /api/icon-library. The Saved Sprites /
+// Update Sprite flow keeps using /api/master-library (CRM_UI_LIBRARY) unchanged.
+app.use("/api/icon-library", createMasterLibraryRouter({
+    getSession,
+    requireSession,
+    cfg: require("./lib/repo-config").loadIconRepo(),
+    tag: "icon-library",
+    tokenVar: "ICON_REPO_TOKEN"
+}));
+
 // ===================================
 // SAVE SPRITE (new endpoint — local disk + Stratus, no Catalyst DataStore needed)
 // POST /api/save-sprite

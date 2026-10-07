@@ -304,14 +304,12 @@
   SF.isMasterLibrarySignedOut = _isSignedOut;
 
   /**
-   * Fetch the latest branch tip from the repository, then refresh both this
-   * panel and the Library page icons (exploded from the sprites).
+   * Fetch the latest branch tip from the repository and refresh this panel.
    * @param {{onDone?:Function}} [opts]
    */
   SF.syncMasterLibrary = function (opts) {
     opts = opts || {};
     _setBusy(true, 'Pulling latest files from repository…');
-    $('#libRepoSyncBtn').prop('disabled', true).addClass('is-busy');
     $.ajax({
       url: _url('api/master-library/sync'),
       type: 'POST',
@@ -320,19 +318,16 @@
       headers: _authHeaders(),
       success: function (data) {
         _setBusy(false, '');
-        $('#libRepoSyncBtn').prop('disabled', false).removeClass('is-busy');
         _applyListing(data);
         var n = (data && data.synced && data.synced.length) || 0;
         var miss = (data && data.missing) || [];
         SF.showToast('Synced ' + n + ' file(s) from ' + (_cfg().repoName || 'repository') +
           (data && data.lastCommit ? ' @ ' + _shortSha(data.lastCommit) : '') +
           (miss.length ? ' — missing: ' + miss.join(', ') : ''));
-        if (typeof SF.loadRepoLibraryIcons === 'function') SF.loadRepoLibraryIcons(true);
         if (typeof opts.onDone === 'function') opts.onDone(true, data);
       },
       error: function (xhr, status) {
         _setBusy(false, '');
-        $('#libRepoSyncBtn').prop('disabled', false).removeClass('is-busy');
         if (xhr && xhr.status === 401) {
           if (typeof SF.handleHostedUnauthorized === 'function') SF.handleHostedUnauthorized('Session expired. Sign in with Zoho and try again.');
           if (typeof opts.onDone === 'function') opts.onDone(false);
@@ -342,7 +337,6 @@
         if (data) _applyListing(data);
         var msg = _xhrMessage(xhr, status, 'Sync failed');
         SF.showToast('Repository sync failed: ' + msg);
-        if (typeof SF.setRepoLibraryError === 'function') SF.setRepoLibraryError(msg);
         if (typeof opts.onDone === 'function') opts.onDone(false, data);
       }
     });
@@ -483,8 +477,6 @@
         }
         if (typeof opts.onSuccess === 'function') opts.onSuccess(res);
         if (typeof SF.resetSpriteWorkspace === 'function') SF.resetSpriteWorkspace();
-        // The pushed sprite is now the repository version: refresh the Library icons from it.
-        if (typeof SF.loadRepoLibraryIcons === 'function') SF.loadRepoLibraryIcons(true);
       },
       error: function (xhr, status) {
         if (xhr && xhr.status === 401) {

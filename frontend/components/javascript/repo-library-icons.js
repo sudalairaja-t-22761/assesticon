@@ -1,9 +1,10 @@
 /**
  * SpriteForge - Repository icons in the Library
  *
- * Reads both CRM_UI_LIBRARY sprites (crmutil_icons.svg and svg_cssicons.svg)
- * DIRECTLY from the repository (via /api/master-library/file — nothing is
- * stored in Catalyst), splits every <symbol> into its own standalone SVG and
+ * Reads the Library's icon repo (Iconassest, folder Sprite) DIRECTLY from the
+ * repository via /api/icon-library/* — a different repository from the
+ * CRM_UI_LIBRARY one used by Saved Sprites. Nothing is stored in Catalyst.
+ * Splits every <symbol> of the sprite into its own standalone SVG and
  * shows them as individual icons in the Library page. They are read-only
  * (no delete), can be added to the current sprite or a webfont like any other
  * Library icon, and are refreshed by "Sync from repo".
@@ -17,20 +18,23 @@
     icons: [],         // Library-shaped icon descriptors (source: 'repo')
     sprites: [],       // [{ name, base, count }]
     commit: null,      // commit the icons were built from
+    commitInfo: null,  // { sha, date, author, subject } of that commit
     loading: false,
     error: null,
     pending: null      // jqXHR/promise of the in-flight load
   };
 
   function _spriteFiles() {
-    var cfg = typeof SF.masterLibraryConfig === 'function' ? SF.masterLibraryConfig() : (window.SF_REPO_CONFIG || {});
-    return (cfg.files || []).filter(function (f) { return f && f.kind === 'sprite'; });
+    return (_cfg().files || []).filter(function (f) { return f && f.kind === 'sprite'; });
   }
 
+  // Icon repo settings: server answer (GET api/icon-library/config) over the config.js defaults.
+  var _serverCfg = null;
+  function _cfg() { return _serverCfg || window.SF_ICON_REPO_CONFIG || {}; }
+  SF.iconRepoConfig = _cfg;
+
   function _url(p) {
-    return typeof SF.masterLibraryUrl === 'function'
-      ? SF.masterLibraryUrl(p)
-      : String(window.SF_CATALYST_API_BASE || '/server/spriteForgeJoin/').replace(/\/+$/, '') + '/' + p;
+    return String(window.SF_CATALYST_API_BASE || '/server/spriteForgeJoin/').replace(/\/+$/, '') + '/' + p;
   }
 
   function _headers() {
@@ -44,7 +48,7 @@
   function _fetchText(name) {
     return new Promise(function (resolve, reject) {
       $.ajax({
-        url: _url('api/master-library/file?name=' + encodeURIComponent(name)),
+        url: _url('api/icon-library/file?name=' + encodeURIComponent(name)),
         type: 'GET',
         dataType: 'text',
         timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000,
@@ -59,19 +63,18 @@
     });
   }
 
-  function _getListing() {
+  function _getListing(refresh) {
     return new Promise(function (resolve, reject) {
       $.ajax({
-        url: _url('api/master-library'),
+        url: _url('api/icon-library' + (refresh ? '?refresh=1' : '')),
         type: 'GET',
         dataType: 'json',
         timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000,
         headers: _headers(),
         success: resolve,
         error: function (xhr, status) {
-          var e = new Error(typeof SF.masterLibraryXhrMessage === 'function'
-            ? SF.masterLibraryXhrMessage(xhr, status, 'Could not read the repository')
-            : ((xhr.responseJSON && xhr.responseJSON.message) || 'Could not read the repository'));
+          var e = new Error((xhr.responseJSON && xhr.responseJSON.message) ||
+            (status === 'timeout' ? 'The icon repository did not answer in time' : 'Could not read the icon repository'));
           e.status = xhr.status;
           reject(e);
         }
@@ -139,19 +142,259 @@
     });
   }
 
+  // ── add new icons to the repo sprite (appended, never overlapping) ──────
+
+  function _escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  /** Give a new icon's own classes / ids a unique prefix so they cannot clash with the sprite's. */
+  function _isolate(icon, token) {
+    var style = icon.styleContent || '', defs = icon.defsContent || '', content = icon.svgContent || '';
+    var classMap = {}, idMap = {}, m;
+    var selRe = /([^{}]+)\{/g;
+    while ((m = selRe.exec(style.replace(/\/\*[\s\S]*?\*\//g, ''))) !== null) {
+      var cRe = /\.(-?[_a-zA-Z][\w-]*)/g, c;
+      while ((c = cRe.exec(m[1])) !== null) classMap[c[1]] = token + c[1];
+    }
+    var idRe = /\bid\s*=\s*["']([^"']+)["']/g;
+    while ((m = idRe.exec(defs + content)) !== null) idMap[m[1]] = token + m[1];
+    function ids(t) {
+      Object.keys(idMap).forEach(function (id) {
+        var e = _escRe(id);
+        t = t.replace(new RegExp('\\bid\\s*=\\s*(["\'])' + e + '\\1', 'g'), 'id="' + idMap[id] + '"')
+             .replace(new RegExp('url\\(\\s*#' + e + '\\s*\\)', 'g'), 'url(#' + idMap[id] + ')')
+             .replace(new RegExp('((?:xlink:)?href\\s*=\\s*["\'])#' + e + '(["\'])', 'g'), '$1#' + idMap[id] + '$2');
+      });
+      return t;
+    }
+    function classes(t) {
+      return t.replace(/\bclass\s*=\s*(["'])([^"']*)\1/g, function (all, q, list) {
+        return 'class=' + q + list.split(/\s+/).map(function (k) { return classMap[k] || k; }).join(' ') + q;
+      });
+    }
+    Object.keys(classMap).forEach(function (k) {
+      style = style.replace(new RegExp('\\.' + _escRe(k) + '(?![\\w-])', 'g'), '.' + classMap[k]);
+    });
+    icon.styleContent = ids(style);
+    icon.defsContent = ids(classes(defs));
+    icon.svgContent = ids(classes(content));
+  }
+
+  function _camel(name) {
+    return String(name).replace(/[-_\s]+(.)?/g, function (_, ch) { return ch ? ch.toUpperCase() : ''; });
+  }
+
+  /**
+   * Append new icons to the sprite TEXT. The existing sprite is kept exactly as it is: the
+   * new <g> groups go before the first <symbol>, the new <symbol>s before </svg>, and each
+   * new icon is placed after the last existing icon with every candidate spot checked
+   * against all existing viewBoxes, so nothing overlaps.
+   * @param {string} spriteText
+   * @param {Array<{name:string, text:string}>} items  single-icon SVG sources
+   * @returns {{svg:string, added:string[], skipped:Array<{name,reason}>, placed:Array}}
+   */
+  SF.addIconsToSpriteText = function (spriteText, items) {
+    var skipped = [], added = [], placed = [];
+    var rects = [], ids = {}, gids = {};
+    var symRe = /<symbol\b[^>]*>/g, sm;
+    while ((sm = symRe.exec(spriteText)) !== null) {
+      var vb = /viewBox\s*=\s*["']([^"']+)["']/.exec(sm[0]);
+      var id = /\bid\s*=\s*["']([^"']+)["']/.exec(sm[0]);
+      if (id) ids[id[1].toLowerCase()] = true;
+      if (vb) {
+        var n = vb[1].trim().split(/[\s,]+/).map(Number);
+        if (n.length === 4 && n.every(isFinite)) rects.push({ spriteX: n[0], spriteY: n[1], width: n[2], height: n[3] });
+      }
+    }
+    var gRe = /\bid\s*=\s*["']([^"']+)["']/g, gm;
+    while ((gm = gRe.exec(spriteText)) !== null) gids[gm[1]] = true;
+
+    var symIds = Object.keys(ids);
+    var prefix = symIds.length && symIds.filter(function (i) { return i.indexOf('zcicn-') === 0; }).length * 2 >= symIds.length
+      ? 'zcicn-' : ((state.settings && state.settings.prefix) || 'zcicn-');
+
+    var root = /<svg\b[^>]*>/.exec(spriteText);
+    var rootVb = root && /viewBox\s*=\s*["']\s*[\d.-]+[\s,]+[\d.-]+[\s,]+([\d.]+)[\s,]+([\d.]+)/.exec(root[0]);
+    var W = rootVb ? Math.ceil(+rootVb[1]) : 450;
+    var H = rootVb ? Math.ceil(+rootVb[2]) : 0;
+
+    var icons = [];
+    items.forEach(function (it) {
+      var icon = SF.parseSVGFile(it.text, it.name);
+      if (!icon) { skipped.push({ name: it.name, reason: 'not a readable SVG' }); return; }
+      var symbolId = prefix + icon.name;
+      if (ids[symbolId.toLowerCase()]) { skipped.push({ name: icon.name, reason: 'already in the sprite' }); return; }
+      ids[symbolId.toLowerCase()] = true;
+      var gId = _camel(icon.name) + 'ZCI';
+      while (gids[gId]) gId += '_n';
+      gids[gId] = true;
+      icon.symbolId = symbolId;
+      icon.gId = gId;
+      _isolate(icon, 'n' + Date.now().toString(36) + icons.length + '-');
+      icons.push(icon);
+    });
+    if (!icons.length) return { svg: spriteText, added: added, skipped: skipped, placed: placed };
+
+    var pos = SF.placeNewIcons(rects, icons, W, { iconsPerRow: 0 });
+    var newG = [], newSym = [], newStyle = '', newDefs = '';
+    icons.forEach(function (icon) {
+      var tx = Math.round(icon.spriteX - icon.originX), ty = Math.round(icon.spriteY - icon.originY);
+      var hasStroke = /<[^>]+\bstroke\s*=/i.test(icon.svgContent || '');
+      var a = 'id="' + SF.escapeAttr(icon.gId) + '"';
+      if (tx || ty) a += ' transform="translate(' + tx + ',' + ty + ')"';
+      if (icon.rootFill) a += ' fill="' + SF.escapeAttr(icon.rootFill) + '"';
+      if (icon.rootStroke && !hasStroke) a += ' stroke="' + SF.escapeAttr(icon.rootStroke) + '"';
+      if (icon.colorMode === 'stroke' && !icon.rootFill) a += ' fill="none"';
+      newG.push('<g ' + a + '>\n' + icon.svgContent + '\n</g>');
+      newSym.push('<symbol viewBox="' + Math.round(icon.spriteX) + ' ' + Math.round(icon.spriteY) + ' ' + Math.ceil(icon.width) + ' ' + Math.ceil(icon.height) + '" id="' + SF.escapeAttr(icon.symbolId) + '">\n<use href="#' + SF.escapeAttr(icon.gId) + '"></use>\n</symbol>');
+      if (icon.styleContent && icon.styleContent.trim()) newStyle += '\n' + icon.styleContent.trim();
+      if (icon.defsContent && icon.defsContent.trim()) newDefs += '\n' + icon.defsContent.trim();
+      added.push(icon.name);
+      placed.push({ name: icon.name, x: icon.spriteX, y: icon.spriteY, w: icon.width, h: icon.height });
+    });
+
+    var out = spriteText;
+    // sprite size grows only when the new icons run past the bottom / right edge
+    var newH = Math.max(H, Math.ceil(pos.maxBottom + ((state.settings && state.settings.padding) || 5)));
+    var newW = Math.max(W, Math.ceil(pos.maxRight + ((state.settings && state.settings.padding) || 5)));
+    if (root && (newH !== H || newW !== W)) {
+      var r2 = root[0]
+        .replace(/(\bwidth\s*=\s*["'])[\d.]+(px)?/, '$1' + newW + '$2')
+        .replace(/(\bheight\s*=\s*["'])[\d.]+(px)?/, '$1' + newH + '$2')
+        .replace(/(viewBox\s*=\s*["']\s*[\d.-]+[\s,]+[\d.-]+[\s,]+)[\d.]+([\s,]+)[\d.]+/, '$1' + newW + '$2' + newH)
+        .replace(/(enable-background\s*:\s*new\s+[\d.-]+\s+[\d.-]+\s+)[\d.]+(\s+)[\d.]+/, '$1' + newW + '$2' + newH);
+      out = out.replace(root[0], function () { return r2; });
+    }
+    if (newStyle) {
+      var se = out.indexOf('</style>');
+      out = se >= 0 ? out.slice(0, se) + newStyle + '\n' + out.slice(se) : out.replace(/(<svg\b[^>]*>)/, function (m) { return m + '\n<style type="text/css">' + newStyle + '\n</style>'; });
+    }
+    if (newDefs) {
+      var de = out.indexOf('</defs>');
+      if (de >= 0) out = out.slice(0, de) + newDefs + '\n' + out.slice(de);
+      else { var se2 = out.indexOf('</style>'); var at = se2 >= 0 ? se2 + 8 : out.search(/<svg\b[^>]*>/); out = out.slice(0, at) + '\n<defs>' + newDefs + '\n</defs>' + out.slice(at); }
+    }
+    var firstSym = out.indexOf('<symbol');
+    var gs = newG.join('\n') + '\n';
+    out = firstSym >= 0 ? out.slice(0, firstSym) + gs + out.slice(firstSym) : out.replace('</svg>', function () { return gs + '</svg>'; });
+    var close = out.lastIndexOf('</svg>');
+    out = out.slice(0, close) + newSym.join('\n') + '\n' + out.slice(close);
+    return { svg: out, added: added, skipped: skipped, placed: placed };
+  };
+
+  function _readFiles(fileList) {
+    return Promise.all(Array.prototype.slice.call(fileList).filter(function (f) { return /\.svg$/i.test(f.name); }).map(function (f) {
+      return new Promise(function (resolve) {
+        var rd = new FileReader();
+        rd.onload = function () { resolve({ name: f.name, text: String(rd.result || '') }); };
+        rd.onerror = function () { resolve(null); };
+        rd.readAsText(f);
+      });
+    })).then(function (a) { return a.filter(Boolean); });
+  }
+
+  /** Commit a new sprite text to the icon repo. */
+  function _commit(svg, names) {
+    var file = _spriteFiles()[0];
+    return new Promise(function (resolve, reject) {
+      $.ajax({
+        url: _url('api/icon-library/save'),
+        type: 'POST',
+        headers: _headers(),
+        contentType: 'application/json',
+        dataType: 'json',
+        timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000,
+        data: JSON.stringify({ files: [{ name: file.name, content: svg }], message: 'Add ' + names.join(', ') + ' to ' + file.name + ' via SpriteForge' }),
+        success: resolve,
+        error: function (xhr, status) {
+          var d = xhr.responseJSON;
+          reject(new Error((d && d.message) || (status === 'timeout' ? 'The repository did not answer in time' : 'Commit failed')));
+        }
+      });
+    });
+  }
+
+  /** Library "Add icon": append SVG files to the repo sprite, commit, reload the Library. */
+  SF.addIconsToIconRepo = function (fileList) {
+    var file = _spriteFiles()[0];
+    if (!file) { SF.showToast('No icon repository sprite configured'); return Promise.resolve(); }
+    return _readFiles(fileList).then(function (items) {
+      if (!items.length) { SF.showToast('Choose one or more .svg files'); return; }
+      return _appendItems(items);
+    });
+  };
+
+  // One append at a time: each reads the latest sprite, so parallel adds would overwrite each other.
+  var _queue = Promise.resolve();
+  function _appendItems(items, quiet) {
+    var job = _queue.then(function () { return _appendNow(items, quiet); });
+    _queue = job.catch(function () {});
+    return job;
+  }
+
+  /** @returns {Promise<{ok:boolean, added:string[], skipped:Array, error?:string}>} */
+  function _appendNow(items, quiet) {
+    var file = _spriteFiles()[0];
+    var result = { ok: false, added: [], skipped: [] };
+    return Promise.resolve().then(function () {
+      if (!quiet) SF.showToast('Reading ' + file.name + ' from ' + (_cfg().repoName || 'repository') + '…');
+      return _getListing(true).then(function () { return _fetchText(file.name); }).then(function (res) {
+        var r = SF.addIconsToSpriteText(res.text, items);
+        result.skipped = r.skipped;
+        if (!quiet) r.skipped.forEach(function (s) { SF.showToast(s.name + ' skipped: ' + s.reason); });
+        if (!r.added.length) {
+          result.ok = true;
+          if (quiet && r.skipped.length) SF.showToast('Library: ' + r.skipped.length + ' icon(s) already in ' + file.name + ' — nothing added');
+          return;
+        }
+        return _commit(r.svg, r.added).then(function (out) {
+          result.ok = true;
+          result.added = r.added;
+          SF.showToast('Added ' + r.added.join(', ') + (out && out.pushed ? ' and pushed ' + String(out.commit || '').slice(0, 8) + ' to ' + out.branch : ' (repository already up to date)'));
+          return SF.loadRepoLibraryIcons(true, true);
+        });
+      });
+    }).then(function () { return result; }, function (err) {
+      result.error = (err && err.message) || 'unknown error';
+      if (!quiet && err && err.status === 401 && typeof SF.handleHostedUnauthorized === 'function') return SF.handleHostedUnauthorized('Session expired. Sign in with Zoho and try again.');
+      SF.showToast((quiet ? 'Library auto-add failed: ' : 'Add icon failed: ') + result.error);
+      return result;
+    });
+  }
+
+  /** Add single-icon SVGs ({name, text}) to the repo sprite; see _appendNow for the result. */
+  SF.addItemsToIconRepo = function (items, quiet) { return _appendItems(items, quiet); };
+
+  /**
+   * Called when a sprite is created: every NEW icon of it is appended to the Library's repo
+   * sprite (after its last icon, no overlap, names already there are skipped). The repo sprite
+   * is never regenerated — only the new icons are added to its text. Never blocks the caller.
+   */
+  SF.autoAddIconsToIconRepo = function (icons) {
+    if (_signedOut() || !_spriteFiles().length) return Promise.resolve();
+    var items = (icons || []).filter(function (i) { return i && !i.isExisting && i.svgContent; }).map(function (i) {
+      return { name: i.name, text: _standaloneSvg(i, i.styleContent || '', i.defsContent || '') };
+    });
+    if (!items.length) return Promise.resolve();
+    return _appendItems(items, true);
+  };
+
+  $(document).on('click', '#libAddIconBtn', function () { $('#libAddIconInput').val('').trigger('click'); });
+  $(document).on('change', '#libAddIconInput', function () {
+    if (this.files && this.files.length) SF.addIconsToIconRepo(this.files);
+  });
+
   // ── public API ──────────────────────────────────────────────────────────
 
   function _publish() {
     if (typeof SF.setRepoLibraryIcons === 'function') SF.setRepoLibraryIcons(SF.repoLib.icons);
     _renderStatus();
-    if (typeof SF.refreshSpriteSourceOptions === 'function') SF.refreshSpriteSourceOptions(); // icon counts on the cards
   }
 
   function _renderStatus() {
     var r = SF.repoLib;
     var $status = $('#libRepoStatus');
-    var cfg = typeof SF.masterLibraryConfig === 'function' ? SF.masterLibraryConfig() : {};
-    var text = '';
+    var cfg = _cfg();
+    var text = '', tip = '';
     if (r.loading) {
       text = 'Loading sprites from ' + (cfg.repoName || 'repository') + '…';
     } else if (r.error) {
@@ -159,9 +402,19 @@
     } else if (r.sprites.length) {
       text = r.sprites.map(function (s) { return s.base + ' (' + s.count + ')'; }).join(' · ') +
         ' from ' + (cfg.repoName || 'repository') + (cfg.branch ? '@' + cfg.branch : '') +
-        (r.commit ? ' · ' + String(r.commit).slice(0, 8) : '');
+        (r.commit ? ' · commit ' + String(r.commit).slice(0, 8) : '');
+      var ci = r.commitInfo;
+      if (ci) {
+        var d = ci.date ? new Date(ci.date) : null;
+        var when = d && !isNaN(d.getTime())
+          ? d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) + ', ' +
+            d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+          : '';
+        text += (ci.author ? ' · by ' + ci.author : '') + (when ? ' · ' + when : '');
+        tip = (ci.subject ? ci.subject + '\n' : '') + (ci.author || '') + (when ? ' · ' + when : '') + (r.commit ? '\n' + r.commit : '');
+      }
     }
-    $status.text(text).toggleClass('lib-repo-status-error', !!r.error && !r.loading);
+    $status.text(text).attr('title', tip).toggleClass('lib-repo-status-error', !!r.error && !r.loading);
     $('#libRepoBar').toggleClass('hidden', _signedOut());
   }
 
@@ -175,7 +428,7 @@
    * Load (or reload) the repository sprites into the Library.
    * @param {boolean} [force] re-download even when the commit has not changed
    */
-  SF.loadRepoLibraryIcons = function (force) {
+  SF.loadRepoLibraryIcons = function (force, fresh) {
     var r = SF.repoLib;
     if (_signedOut()) {
       r.icons = []; r.sprites = []; r.commit = null; r.error = null;
@@ -191,12 +444,11 @@
     r.error = null;
     _renderStatus();
 
-    var job = _getListing().then(function (listing) {
-      if (listing && 'canCommit' in listing && state.masterLibrary) {
-        state.masterLibrary.canCommit = !!listing.canCommit;
-        state.masterLibrary.commitRestrictedReason = listing.commitRestrictedReason || null;
-      }
+    var job = _getListing(!!fresh).then(function (listing) {
+      if (listing && listing.repo) _serverCfg = Object.assign({}, window.SF_ICON_REPO_CONFIG || {}, listing.repo);
+      r.canCommit = !(listing && 'canCommit' in listing) || !!listing.canCommit;
       var commit = (listing && listing.lastCommit) || null;
+      if (listing && listing.lastCommitInfo) r.commitInfo = listing.lastCommitInfo;
       if (!force && r.icons.length && commit && commit === r.commit) return r.icons; // unchanged
 
       var present = {};
@@ -244,13 +496,8 @@
 
   $(document).on('click', '#libRepoSyncBtn', function () {
     if ($(this).is(':disabled')) return;
-    if (typeof SF.syncMasterLibrary === 'function') {
-      SF.repoLib.loading = true;
-      _renderStatus();
-      SF.syncMasterLibrary(); // POST /sync → refreshes this list via loadRepoLibraryIcons(true)
-    } else {
-      SF.loadRepoLibraryIcons(true);
-    }
+    var $btn = $(this).addClass('is-busy');
+    SF.loadRepoLibraryIcons(true, true).then(function () { $btn.removeClass('is-busy'); });
   });
 
 })(window.SpriteForge, jQuery);

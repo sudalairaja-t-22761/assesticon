@@ -42,7 +42,8 @@ const { createRepoClient } = require("../lib/repo-client");
  */
 function createMasterLibraryRouter(deps) {
     const router = express.Router();
-    const cfg    = repoConfig.load();
+    const cfg    = deps.cfg || repoConfig.load();
+    const tag    = deps.tag || "master-library";
     const client = createRepoClient(cfg);
     const byName = new Map(cfg.files.map((f) => [f.name, f]));
 
@@ -59,7 +60,7 @@ function createMasterLibraryRouter(deps) {
     let inflight = null;
 
     function notConfigured() {
-        return Object.assign(new Error("Repository token (REPO_TOKEN) is not configured on the server"), { status: 503 });
+        return Object.assign(new Error("Repository token (" + (deps.tokenVar || "REPO_TOKEN") + ") is not configured on the server"), { status: 503 });
     }
 
     /** Fetch every configured file from the repository branch tip. Concurrent callers share one fetch. */
@@ -176,7 +177,7 @@ function createMasterLibraryRouter(deps) {
             await ensureLoaded(force);
             res.json({ success: true, ...listing(), ...commitAccess(req) });
         } catch (err) {
-            console.error("[master-library] list:", err.message);
+            console.error("[" + tag + "] list:", err.message);
             // Still answer with whatever is cached so the UI can show the error next to stale data.
             res.status(err.status || 502).json({ success: false, message: err.message, ...listing() });
         }
@@ -188,7 +189,7 @@ function createMasterLibraryRouter(deps) {
             const l = listing();
             res.json({ success: true, synced: l.files.map((f) => f.name), ...l, ...commitAccess(req) });
         } catch (err) {
-            console.error("[master-library] sync:", err.message);
+            console.error("[" + tag + "] sync:", err.message);
             res.status(err.status || 502).json({ success: false, message: err.message, ...listing() });
         }
     });
@@ -270,7 +271,7 @@ function createMasterLibraryRouter(deps) {
                 ...listing()
             });
         } catch (err) {
-            console.error("[master-library] save:", err.message);
+            console.error("[" + tag + "] save:", err.message);
             res.status(err.status || 502).json({ success: false, message: err.message, pushError: err.message });
         }
     });

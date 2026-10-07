@@ -88,6 +88,16 @@
     return { maxRight: maxRight, maxBottom: maxBottom };
   }
 
+  /**
+   * Place new icons after the last of `existing` without overlapping any of them.
+   * existing / icons: [{ spriteX, spriteY, width, height }] (icons get spriteX/spriteY).
+   * @returns {{maxRight:number, maxBottom:number}}
+   */
+  SF.placeNewIcons = function (existing, icons, maxWidth, settings) {
+    var s = Object.assign({ spacing: 7, rowGap: 5, padding: 5, iconsPerRow: 0 }, settings || {});
+    return placeAfterExisting(existing, icons, maxWidth, s);
+  };
+
   /** Overlapping icon pairs in the current layout (for checks / debugging). */
   SF.findLayoutOverlaps = function () {
     var out = [];

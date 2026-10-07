@@ -46,7 +46,6 @@
       var pairs = cfg.pairs || [];
       if (!pairs.length) pairs = (cfg.files || []).filter(function (f) { return f.kind === 'sprite'; }).map(function (f) { return { svg: f.name, styles: null }; });
       var counts = {};
-      ((SF.repoLib && SF.repoLib.sprites) || []).forEach(function (s) { counts[s.name] = s.count; });
       pairs.forEach(function (p) {
         out.push({
           key: 'repo:' + p.svg + '|' + (p.styles || ''),
