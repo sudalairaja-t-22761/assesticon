@@ -7,6 +7,100 @@
 
   var state = SF.state;
 
+  function rectOf(icon) {
+    return { x: icon.spriteX, y: icon.spriteY, w: icon.width, h: icon.height };
+  }
+
+  /** a and b closer than the gaps (or overlapping)? */
+  function collides(a, b, gapX, gapY) {
+    return a.x < b.x + b.w + gapX && b.x < a.x + a.w + gapX &&
+           a.y < b.y + b.h + gapY && b.y < a.y + a.h + gapY;
+  }
+
+  /**
+   * Put new icons into an existing sprite without touching existing positions.
+   * Starts right after the last existing icon (bottom-most row, right-most in it),
+   * fills that line to the sprite width, then wraps to new lines. Every candidate
+   * spot is checked against all existing viewBoxes and already placed icons, with
+   * `spacing` / `rowGap` kept as gaps, so nothing overlaps even in irregular sprites.
+   */
+  function placeAfterExisting(existing, icons, maxWidth, s) {
+    var gapX = s.spacing, gapY = s.rowGap, pad = s.padding;
+    var rects = existing.map(rectOf);
+    var maxRight = 0, maxBottom = 0;
+    rects.forEach(function (r) { maxRight = Math.max(maxRight, r.x + r.w); maxBottom = Math.max(maxBottom, r.y + r.h); });
+    var right = (maxWidth > 0 ? maxWidth : Math.max(maxRight + pad, 450)) - pad;
+
+    // Anchor: the last existing icon = top-most y of the bottom-most row, right-most in that row.
+    var anchor = rects.reduce(function (best, r) {
+      if (!best) return r;
+      if (r.y > best.y + 0.5) return r;
+      if (Math.abs(r.y - best.y) <= 0.5 && r.x + r.w > best.x + best.w) return r;
+      return best;
+    }, null);
+
+    var x = anchor ? anchor.x + anchor.w + gapX : pad;
+    var y = anchor ? anchor.y : pad;
+    var line = [];          // rects placed on the current line
+    var inLine = 0;
+
+    function hit(c) {
+      for (var i = 0; i < rects.length; i++) if (collides(c, rects[i], gapX, gapY)) return rects[i];
+      return null;
+    }
+
+    function nextLine() {
+      // Below everything placed on this line and every existing icon that covers this line's top.
+      var bottom = -Infinity;
+      line.forEach(function (r) { bottom = Math.max(bottom, r.y + r.h); });
+      rects.forEach(function (r) { if (r.y <= y + 0.5 && r.y + r.h > y) bottom = Math.max(bottom, r.y + r.h); });
+      var ny = bottom === -Infinity ? y + 1 : bottom + gapY;
+      y = Math.max(ny, y + 1);
+      x = pad;
+      line = [];
+      inLine = 0;
+    }
+
+    icons.forEach(function (icon) {
+      var w = icon.width, h = icon.height;
+      for (var guard = 0; guard < 100000; guard++) {
+        var rowFull = s.iconsPerRow > 0 && inLine >= s.iconsPerRow;
+        // Wider than the free width: wrap (an icon wider than the whole sprite gets its own line).
+        if (rowFull || (x + w > right && x > pad)) { nextLine(); continue; }
+        var c = { x: x, y: y, w: w, h: h };
+        var r = hit(c);
+        if (r) { x = r.x + r.w + gapX; continue; }
+        icon.spriteX = Math.round(x);
+        icon.spriteY = Math.round(y);
+        var placedRect = rectOf(icon);
+        // Rounding can move it by < 1 px; re-check and nudge right if that created a touch.
+        if (hit(placedRect)) { x += 1; continue; }
+        rects.push(placedRect);
+        line.push(placedRect);
+        inLine++;
+        x = placedRect.x + w + gapX;
+        maxRight = Math.max(maxRight, placedRect.x + w);
+        maxBottom = Math.max(maxBottom, placedRect.y + h);
+        break;
+      }
+    });
+
+    return { maxRight: maxRight, maxBottom: maxBottom };
+  }
+
+  /** Overlapping icon pairs in the current layout (for checks / debugging). */
+  SF.findLayoutOverlaps = function () {
+    var out = [];
+    var list = state.icons;
+    for (var i = 0; i < list.length; i++) {
+      for (var j = i + 1; j < list.length; j++) {
+        if (list[i].isExisting && list[j].isExisting) continue; // existing sprite is kept as-is
+        if (collides(rectOf(list[i]), rectOf(list[j]), 0, 0)) out.push([list[i].name, list[j].name]);
+      }
+    }
+    return out;
+  };
+
   /**
    * Calculate the position of each icon in the sprite
    * @returns {{width: number, height: number}} Total sprite dimensions
@@ -85,6 +179,16 @@
 
     // --- Find the best starting position ---
     // Try to fit on the last existing row if space allows
+    // ── Existing sprite: place new icons after the last existing icon, never overlapping ──
+    if (hasExisting && newIcons.length) {
+      var placed = placeAfterExisting(state.icons.filter(function (icon) {
+        return icon.isExisting && icon.originalSpriteX !== undefined;
+      }), newIcons.map(function (e) { return e.icon; }), maxWidth, s);
+      var W = Math.ceil(Math.max(placed.maxRight + s.padding, maxWidth || 0, 450, 1));
+      var H = Math.ceil(Math.max(placed.maxBottom + s.padding, state.originalSpriteHeight || 0, 1));
+      return { width: W, height: H };
+    }
+
     var currentX, currentY, maxRowHeight;
 
     if (hasExisting) {

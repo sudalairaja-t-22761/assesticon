@@ -270,9 +270,27 @@ served from `GET /api/master-library/config` (token excluded).
 | POST | `/save` | `{ files:[{name,content}], message }` → commit + push |
 | POST | `/test-connection` | Verify token and branch |
 
-The default provider uses the `git` binary (sparse, shallow clone cached in the OS temp
-dir; machine-wide git hooks are disabled for its commits). If the runtime has no `git`
-(e.g. some serverless images), set `REPO_PROVIDER` to a REST dialect the host supports.
+`REPO_PROVIDER=git` (default) uses **isomorphic-git**, a pure-JavaScript git client. It
+keeps a depth-1, single-branch copy of about 1 MB in the temp dir, reads files from git
+objects, and commits and pushes over HTTPS. It does not depend on the platform's git:
+Catalyst ships git 2.25, which is too old for the sparse-checkout commands the CLI engine
+uses. `REPO_PROVIDER=git-cli` forces the git CLI (git 2.35 or newer), and `git-auto` uses
+the CLI when present.
+
+Every repository call has a time limit: `REPO_HTTP_TIMEOUT_MS` per network round-trip
+(default 20000) and `REPO_REQUEST_TIMEOUT_MS` per request (default 25000). A slow or
+unreachable host therefore gets a JSON error instead of a platform timeout.
+
+**Who may commit.** The push uses the shared `REPO_TOKEN`, so the tool checks the signed-in
+user against `REPO_COMMIT_USERS` first. It takes comma-separated emails, `@domain` entries,
+or `*` for every signed-in user, which is the default. Anyone else sees a "Repository access
+restricted" popup, the commit option in Save to Project is disabled for them, and the server
+answers 403.
+
+`GET /api/master-library/diagnose` is public and returns no secrets. It reports the
+engine, the runtime's git version, DNS and HTTPS reachability of the git host, and
+whether the token is accepted. Add `?read=1` to also read the branch, which returns file
+names, sizes and the commit only.
 
 ## License
 

@@ -24,9 +24,31 @@
     lastCommit: null,
     lastCommitInfo: null,
     error: null,
+    canCommit: null,       // from the server: may the signed-in user commit? (null = not known yet)
+    commitRestrictedReason: null,
     source: null,     // { svg, styles } when the workspace was loaded from this folder
     loading: false
   };
+
+  // The server fetches the branch on the first call; never leave the panel "Loading…" forever.
+  var REPO_TIMEOUT_MS = 90000;
+
+  function _xhrMessage(xhr, status, fallback) {
+    var data = xhr && xhr.responseJSON;
+    if (data && data.message) return data.message;
+    if (status === 'timeout') return 'The repository did not answer within ' + (REPO_TIMEOUT_MS / 1000) + ' s. Try Refresh, or Test to check the connection.';
+    if (status === 'parsererror') {
+      // Usually the platform answering instead of the function (e.g. function timeout page).
+      var raw = String((xhr && xhr.responseText) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      return 'The server answered HTTP ' + ((xhr && xhr.status) || '?') + ' without JSON' +
+        (raw ? ': "' + raw.slice(0, 140) + (raw.length > 140 ? '…' : '') + '"' : ' (empty body — the function probably timed out)') +
+        '. Open ' + _url('api/master-library/diagnose') + ' to check the repository connection.';
+    }
+    if (xhr && xhr.status) return fallback + ' (HTTP ' + xhr.status + (xhr.statusText ? ' ' + xhr.statusText : '') + ')';
+    return fallback + ' (no response — network or CORS error)';
+  }
+  SF.masterLibraryXhrMessage = _xhrMessage;
+  SF.MASTER_LIBRARY_TIMEOUT_MS = REPO_TIMEOUT_MS;
 
   function _url(p) {
     return String(API_BASE || '').replace(/\/+$/, '') + '/' + String(p || '').replace(/^\/+/, '');
@@ -204,16 +226,17 @@
       url: _url('api/master-library'),
       type: 'GET',
       dataType: 'json',
+      timeout: REPO_TIMEOUT_MS,
       headers: _authHeaders(),
       success: function (data) { _applyListing(data); },
-      error: function (xhr) {
+      error: function (xhr, status) {
         if (xhr && xhr.status === 401) {
           $panel.addClass('hidden');
           return;
         }
         var data = xhr && xhr.responseJSON;
         if (data && data.files && data.files.length) { _applyListing(data); return; }
-        var msg = (data && data.message) || 'Could not read the repository from the server.';
+        var msg = _xhrMessage(xhr, status, 'Could not read the repository from the server.');
         state.masterLibrary.error = msg;
         _renderHeader();
         $('#mlFilesGrid').html('<div class="saved-empty"><p>' + _esc(msg) + '</p></div>');
@@ -232,9 +255,46 @@
     if ('lastCommit' in data) ml.lastCommit = data.lastCommit || null;
     if ('lastCommitInfo' in data) ml.lastCommitInfo = data.lastCommitInfo || null;
     ml.error = data.success === false ? (data.message || data.error || 'Repository error') : (data.error || null);
+    if ('canCommit' in data) {
+      ml.canCommit = !!data.canCommit;
+      ml.commitRestrictedReason = data.commitRestrictedReason || null;
+    }
     _renderHeader();
     _renderGrid();
   }
+
+  /** Blocking popup for a refused commit. */
+  SF.showRestrictedPopup = function (message) {
+    if (!$('#mlRestrictedModal').length) {
+      $('body').append(
+        '<div class="modal-overlay hidden" id="mlRestrictedModal" role="alertdialog" aria-labelledby="mlRestrictedTitle">' +
+          '<div class="modal-overlay-bg"></div>' +
+          '<div class="modal modal-sm">' +
+            '<div class="modal-header">' +
+              '<h3 id="mlRestrictedTitle" style="color:var(--danger);">' +
+                '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' +
+                ' Repository access restricted' +
+              '</h3>' +
+              '<button class="modal-close" id="mlRestrictedClose" aria-label="Close">&times;</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+              '<p id="mlRestrictedText" style="margin:0 0 10px;color:var(--text-primary);"></p>' +
+              '<p style="margin:0;font-size:12px;color:var(--text-secondary);">Nothing was committed. You can still download the files or save them to your own Saved Sprites.</p>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+              '<button class="btn btn-primary" id="mlRestrictedOk">OK</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>'
+      );
+      $(document).on('click', '#mlRestrictedClose, #mlRestrictedOk, #mlRestrictedModal .modal-overlay-bg', function () {
+        $('#mlRestrictedModal').addClass('hidden');
+      });
+    }
+    $('#mlRestrictedText').text(message || 'You do not have commit access to this repository.');
+    $('#mlRestrictedModal').removeClass('hidden');
+    setTimeout(function () { $('#mlRestrictedOk').trigger('focus'); }, 30);
+  };
 
   // Shared helpers for the Library page (repo-library-icons.js).
   SF.masterLibraryUrl = _url;
@@ -256,6 +316,7 @@
       url: _url('api/master-library/sync'),
       type: 'POST',
       dataType: 'json',
+      timeout: REPO_TIMEOUT_MS,
       headers: _authHeaders(),
       success: function (data) {
         _setBusy(false, '');
@@ -269,7 +330,7 @@
         if (typeof SF.loadRepoLibraryIcons === 'function') SF.loadRepoLibraryIcons(true);
         if (typeof opts.onDone === 'function') opts.onDone(true, data);
       },
-      error: function (xhr) {
+      error: function (xhr, status) {
         _setBusy(false, '');
         $('#libRepoSyncBtn').prop('disabled', false).removeClass('is-busy');
         if (xhr && xhr.status === 401) {
@@ -279,7 +340,7 @@
         }
         var data = xhr && xhr.responseJSON;
         if (data) _applyListing(data);
-        var msg = (data && data.message) || 'Sync failed';
+        var msg = _xhrMessage(xhr, status, 'Sync failed');
         SF.showToast('Repository sync failed: ' + msg);
         if (typeof SF.setRepoLibraryError === 'function') SF.setRepoLibraryError(msg);
         if (typeof opts.onDone === 'function') opts.onDone(false, data);
@@ -293,11 +354,14 @@
       url: _url('api/master-library/test-connection'),
       type: 'POST',
       dataType: 'json',
+      timeout: REPO_TIMEOUT_MS,
       headers: _authHeaders(),
-      complete: function (xhr) {
+      complete: function (xhr, status) {
         _setBusy(false, '');
         var data = xhr.responseJSON || {};
-        SF.showToast((data.success ? 'Repository OK: ' : 'Repository error: ') + (data.detail || data.message || xhr.statusText));
+        SF.showToast((data.success ? 'Repository OK: ' : 'Repository error: ') +
+          (data.detail || data.message || _xhrMessage(xhr, status, 'no answer')) +
+          (data.engine ? ' [' + data.engine + ']' : ''));
       }
     });
   };
@@ -308,9 +372,14 @@
         url: _url('api/master-library/file?name=' + encodeURIComponent(name)),
         type: 'GET',
         dataType: 'text',
+        timeout: REPO_TIMEOUT_MS,
         headers: _authHeaders(),
         success: function (t) { resolve(t || ''); },
-        error: function (xhr) { reject(new Error((xhr.responseJSON && xhr.responseJSON.message) || ('Could not load ' + name))); }
+        error: function (xhr, status) {
+          var json = null;
+          try { json = xhr.responseJSON || JSON.parse(xhr.responseText || ''); } catch (e) { json = null; }
+          reject(new Error(_xhrMessage({ responseJSON: json, status: xhr.status, statusText: xhr.statusText }, status, 'Could not load ' + name)));
+        }
       });
     });
   }
@@ -385,6 +454,10 @@
   SF.saveToMasterLibrary = function (files, message, opts) {
     opts = opts || {};
     if (!files || !files.length) { SF.showToast('Nothing to save'); return; }
+    if (state.masterLibrary.canCommit === false) {
+      SF.showRestrictedPopup(state.masterLibrary.commitRestrictedReason);
+      return;
+    }
     SF.showToast('Committing to ' + (_cfg().repoName || 'repository') + ' (' + (_cfg().branch || '') + ')…');
 
     $.ajax({
@@ -413,12 +486,18 @@
         // The pushed sprite is now the repository version: refresh the Library icons from it.
         if (typeof SF.loadRepoLibraryIcons === 'function') SF.loadRepoLibraryIcons(true);
       },
-      error: function (xhr) {
+      error: function (xhr, status) {
         if (xhr && xhr.status === 401) {
           if (typeof SF.handleHostedUnauthorized === 'function') SF.handleHostedUnauthorized('Session expired. Sign in with Zoho and try again.');
           return;
         }
-        var msg = (xhr && xhr.responseJSON && xhr.responseJSON.message) || 'Server error';
+        if (xhr && xhr.status === 403 && xhr.responseJSON && xhr.responseJSON.restricted) {
+          state.masterLibrary.canCommit = false;
+          state.masterLibrary.commitRestrictedReason = xhr.responseJSON.message;
+          SF.showRestrictedPopup(xhr.responseJSON.message);
+          return;
+        }
+        var msg = _xhrMessage(xhr, status, 'Server error');
         SF.showToast('Commit to repository failed: ' + msg);
       }
     });
@@ -436,6 +515,17 @@
     var canCommit = !_isSignedOut() && (cfg.files || []).length > 0;
     $group.toggleClass('hidden', !canCommit);
     if (!canCommit) return;
+
+    var restricted = state.masterLibrary.canCommit === false;
+    $('#fnameRepoCommit').prop('disabled', restricted);
+    $('#fnameRepoRestricted').remove();
+    if (restricted) {
+      $('#fnameRepoCommit').closest('label').after(
+        '<p class="form-hint ml-restricted-hint" id="fnameRepoRestricted">' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> ' +
+          _esc(state.masterLibrary.commitRestrictedReason || 'You do not have commit access to this repository.') +
+        '</p>');
+    }
 
     $('#fnameRepoFolder').text(cfg.folder || 'Master_ui_library');
     $('#fnameRepoName').text(cfg.repoName || cfg.projectPath || 'repository');
@@ -465,7 +555,7 @@
     var hasCss = window.sfCssPreference !== false && !!state.generatedCSS;
     $('#fnameRepoLessGroup').toggleClass('hidden', !hasCss);
 
-    var checked = !!state.masterLibrary.source;
+    var checked = !!state.masterLibrary.source && !restricted;
     $('#fnameRepoCommit').prop('checked', checked);
     $('#fnameRepoMessage').val('Update ' + ($('#fnameRepoSvg').val() || 'icons') + ' via SpriteForge');
     _applyRepoCommitToggle();

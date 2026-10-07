@@ -54,6 +54,7 @@ function redact(text, secrets) {
 
 function createGitProvider(cfg) {
     const mutex   = createMutex();
+    // (engine: git CLI)
     const secrets = [cfg.token];
     const authHeader = cfg.token
         ? "Authorization: Basic " + Buffer.from(`${cfg.tokenUser}:${cfg.token}`, "utf8").toString("base64")
@@ -229,6 +230,229 @@ function createGitProvider(cfg) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Provider: pure-JavaScript git (isomorphic-git) — no `git` binary needed
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Catalyst function runtimes do not ship the git CLI. This provider speaks git
+// smart-HTTP directly: a depth-1, single-branch, bare clone in os.tmpdir()
+// (the CRM_UI_LIBRARY branch is < 1 MB), files are read from git objects, and
+// commits are built from trees without a working copy, then pushed.
+
+/**
+ * isomorphic-git's node HTTP client has no timeout: a host that never answers would
+ * hang the request until the platform kills the function. Every round-trip gets a limit.
+ */
+// Node ≥ 19's default agents close sockets idle for 5 s, and simple-get (used by
+// isomorphic-git) turns that into "Request timed out". A push waits silently while the
+// server processes the pack, so it needs agents without an idle timeout; the limits
+// below still stop a host that never answers.
+const NO_IDLE_AGENTS = {
+    "http:":  new (require("http").Agent)({ keepAlive: true, timeout: 0 }),
+    "https:": new (require("https").Agent)({ keepAlive: true, timeout: 0 })
+};
+
+function httpWithTimeout(http, ms, host, pushMs) {
+    return {
+        request(args) {
+            let proto = "https:";
+            try { proto = new URL(args.url).protocol; } catch (_) {}
+            const isPush = /git-receive-pack$/.test(String(args.url || "").split("?")[0]) && String(args.method || "").toUpperCase() === "POST";
+            const limitMs = isPush ? Math.max(ms, pushMs || ms) : ms;
+            let timer;
+            const limit = new Promise((_, reject) => {
+                timer = setTimeout(() => {
+                    reject(Object.assign(new Error(isPush
+                        ? `${host} did not confirm the push within ${Math.round(limitMs / 1000)} s — it may still have been applied; use Sync from repo to check`
+                        : `no answer from ${host} within ${Math.round(limitMs / 1000)} s (is the git host reachable from this server?)`), { code: "ETIMEDOUT" }));
+                }, limitMs);
+            });
+            const req = http.request({ ...args, agent: args.agent || NO_IDLE_AGENTS[proto] || undefined });
+            return Promise.race([req, limit]).finally(() => clearTimeout(timer));
+        }
+    };
+}
+
+function createIsoGitProvider(cfg) {
+    const git    = require("isomorphic-git");
+    const http   = httpWithTimeout(require("isomorphic-git/http/node"), cfg.httpTimeoutMs || 20000, (() => { try { return new URL(cfg.gitUrl).host; } catch (_) { return "the git host"; } })(), cfg.requestTimeoutMs || 25000);
+    const mutex  = createMutex();
+    const secrets = [cfg.token];
+    const headers = cfg.token
+        ? { Authorization: "Basic " + Buffer.from(`${cfg.tokenUser}:${cfg.token}`, "utf8").toString("base64") }
+        : {};
+    const cacheKey = crypto.createHash("sha1").update(`${cfg.gitUrl}#${cfg.branch}`).digest("hex").slice(0, 12);
+    const dir = path.join(os.tmpdir(), "svgforge-isogit", cacheKey);
+    const gitdir = dir; // bare layout: objects/refs live directly in dir
+    const remoteRef = `refs/remotes/origin/${cfg.branch}`;
+    const localRef  = `refs/heads/${cfg.branch}`;
+    const base = { fs, http, dir, gitdir, url: cfg.gitUrl, headers };
+
+    function wrap(e, what) {
+        const msg = redact((e && (e.data && e.data.statusMessage ? `${e.message} (${e.data.statusCode} ${e.data.statusMessage})` : e.message)) || String(e), secrets);
+        const err = new Error(`${what} failed: ${msg}`);
+        err.code = e && e.code;
+        return err;
+    }
+
+    async function exists() {
+        try { await git.resolveRef({ fs, gitdir, ref: "HEAD", depth: 1 }); return true; }
+        catch (_) { return fs.existsSync(path.join(gitdir, "config")); }
+    }
+
+    /** Fetch the branch tip; returns its commit oid (null when the branch does not exist yet). */
+    async function fetchTip() {
+        if (!(await exists())) {
+            fs.rmSync(dir, { recursive: true, force: true });
+            fs.mkdirSync(dir, { recursive: true });
+            await git.init({ fs, dir, gitdir, bare: true, defaultBranch: cfg.branch });
+            await git.addRemote({ fs, gitdir, remote: "origin", url: cfg.gitUrl, force: true });
+        }
+        try {
+            const r = await git.fetch({ ...base, remote: "origin", ref: cfg.branch, singleBranch: true, depth: 1, tags: false, prune: false });
+            const oid = r.fetchHead || await git.resolveRef({ fs, gitdir, ref: remoteRef });
+            await git.writeRef({ fs, gitdir, ref: localRef, value: oid, force: true });
+            return oid;
+        } catch (e) {
+            if (e && (e.code === "NotFoundError" || /could not find|not found|couldn't find remote ref/i.test(e.message || ""))) {
+                // Branch is new on the remote: start from the default branch tip.
+                const info = await git.getRemoteInfo({ http, url: cfg.gitUrl, headers });
+                const def = info.HEAD ? String(info.HEAD).replace(/^refs\/heads\//, "") : null;
+                if (!def) throw wrap(e, "git fetch");
+                const r = await git.fetch({ ...base, remote: "origin", ref: def, singleBranch: true, depth: 1, tags: false });
+                return r.fetchHead || null;
+            }
+            throw wrap(e, "git fetch");
+        }
+    }
+
+    async function commitInfo(oid) {
+        try {
+            const c = await git.readCommit({ fs, gitdir, oid });
+            const a = c.commit.committer || c.commit.author || {};
+            return { sha: oid, date: a.timestamp ? new Date(a.timestamp * 1000).toISOString() : null, author: (c.commit.author && c.commit.author.name) || null, subject: String(c.commit.message || "").split("\n")[0] };
+        } catch (_) { return { sha: oid, date: null, author: null, subject: null }; }
+    }
+
+    async function readPath(commitOid, repoPath) {
+        try {
+            const { blob } = await git.readBlob({ fs, gitdir, oid: commitOid, filepath: repoPath });
+            return Buffer.from(blob);
+        } catch (e) {
+            if (e && e.code === "NotFoundError") return null;
+            throw wrap(e, `read ${repoPath}`);
+        }
+    }
+
+    /** New tree oid = tree of `treeOid` with `files` ({ "a/b.svg": Buffer }) written in. */
+    async function writeTreeWith(treeOid, files) {
+        const entries = treeOid ? (await git.readTree({ fs, gitdir, oid: treeOid })).tree.slice() : [];
+        const direct = {};
+        const nested = {};
+        Object.keys(files).forEach((p) => {
+            const i = p.indexOf("/");
+            if (i === -1) direct[p] = files[p];
+            else {
+                const head = p.slice(0, i);
+                (nested[head] = nested[head] || {})[p.slice(i + 1)] = files[p];
+            }
+        });
+        for (const name of Object.keys(direct)) {
+            const oid = await git.writeBlob({ fs, gitdir, blob: new Uint8Array(direct[name]) });
+            const at = entries.findIndex((e) => e.path === name);
+            const entry = { mode: at >= 0 && entries[at].type === "blob" ? entries[at].mode : "100644", path: name, oid, type: "blob" };
+            if (at >= 0) entries[at] = entry; else entries.push(entry);
+        }
+        for (const name of Object.keys(nested)) {
+            const at = entries.findIndex((e) => e.path === name && e.type === "tree");
+            const sub = await writeTreeWith(at >= 0 ? entries[at].oid : null, nested[name]);
+            const entry = { mode: "040000", path: name, oid: sub, type: "tree" };
+            if (at >= 0) entries[at] = entry; else entries.push(entry);
+        }
+        return git.writeTree({ fs, gitdir, tree: entries });
+    }
+
+    async function buildCommit(parentOid, files, opts) {
+        const parentTree = parentOid ? (await git.readCommit({ fs, gitdir, oid: parentOid })).commit.tree : null;
+        const map = {};
+        files.forEach((f) => { map[f.repoPath.replace(/^\/+/, "")] = Buffer.isBuffer(f.content) ? f.content : Buffer.from(String(f.content), "utf8"); });
+        const tree = await writeTreeWith(parentTree, map);
+        if (tree === parentTree) return null; // nothing changed
+        const now = Math.floor(Date.now() / 1000);
+        const tz = new Date().getTimezoneOffset();
+        const who = { name: opts.name, email: opts.email, timestamp: now, timezoneOffset: tz };
+        return git.writeCommit({ fs, gitdir, commit: { message: opts.message.endsWith("\n") ? opts.message : opts.message + "\n", tree, parent: parentOid ? [parentOid] : [], author: who, committer: who } });
+    }
+
+    async function pushCommit(oid) {
+        await git.writeRef({ fs, gitdir, ref: localRef, value: oid, force: true });
+        const r = await git.push({ ...base, remote: "origin", ref: cfg.branch, remoteRef: cfg.branch, force: false });
+        const status = r && r.refs && r.refs[localRef];
+        if (r && r.ok === false || (status && status.ok === false)) {
+            const e = new Error(`push rejected: ${(status && status.error) || (r && r.error) || "unknown"}`);
+            e.rejected = true;
+            throw e;
+        }
+    }
+
+    return {
+        provider: "git",
+        engine: "isomorphic-git",
+
+        async test() {
+            if (!cfg.token) return { ok: false, provider: "git", engine: "isomorphic-git", detail: "REPO_TOKEN is not set" };
+            try {
+                const info = await git.getRemoteInfo({ http, url: cfg.gitUrl, headers });
+                const oid = info.refs && info.refs.heads && info.refs.heads[cfg.branch];
+                return {
+                    ok: true, provider: "git", engine: "isomorphic-git", branchExists: !!oid, remoteCommit: oid || null,
+                    detail: oid ? `Branch ${cfg.branch} found (isomorphic-git)` : `Connected, but branch ${cfg.branch} does not exist yet (it will be created on first commit)`
+                };
+            } catch (e) {
+                return { ok: false, provider: "git", engine: "isomorphic-git", detail: wrap(e, "connect").message };
+            }
+        },
+
+        readFiles(paths) {
+            return mutex(async () => {
+                const tip = await fetchTip();
+                const info = tip ? await commitInfo(tip) : null;
+                const out = [];
+                for (const repoPath of paths) {
+                    const content = tip ? await readPath(tip, repoPath) : null;
+                    out.push(content ? { repoPath, content, commit: tip, commitInfo: info } : { repoPath, content: null, commit: tip, commitInfo: info, missing: true });
+                }
+                return out;
+            });
+        },
+
+        writeFiles(files, opts) {
+            opts = opts || {};
+            return mutex(async () => {
+                const name  = opts.authorName  || cfg.authorName;
+                const email = opts.authorEmail || cfg.authorEmail;
+                const message = opts.message || `Update ${files.map((f) => path.posix.basename(f.repoPath)).join(", ")} via SpriteForge`;
+                for (let attempt = 0; attempt < 2; attempt++) {
+                    const tip = await fetchTip();
+                    let oid;
+                    try { oid = await buildCommit(tip, files, { name, email, message }); }
+                    catch (e) { throw wrap(e, "git commit"); }
+                    if (!oid) return { changed: false, pushed: false, commit: tip, branch: cfg.branch, message: "No changes — repository already has this content" };
+                    try {
+                        await pushCommit(oid);
+                        return { changed: true, pushed: true, commit: oid, branch: cfg.branch, message };
+                    } catch (e) {
+                        // Someone pushed in between: rebuild the same file changes on the new tip once.
+                        const rejected = e.rejected || /reject|non-fast-forward|fetch first|not a fast/i.test(e.message || "");
+                        if (!rejected || attempt === 1) throw wrap(e, "git push");
+                    }
+                }
+                throw new Error("git push failed");
+            });
+        }
+    };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Provider: REST APIs (GitLab / Gitea / GitHub dialects)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -356,8 +580,41 @@ function createRestProvider(cfg) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * REPO_PROVIDER:
+ *   git (default) / isogit — isomorphic-git (pure JavaScript). Same behaviour on every
+ *                   runtime; does not depend on the platform's git version (Catalyst
+ *                   ships git 2.25, which lacks `sparse-checkout --no-cone` / `add --sparse`).
+ *   git-cli       — the git CLI (needs git ≥ 2.35)
+ *   git-auto      — the git CLI when present, otherwise isomorphic-git
+ *   gitlab | gitea | github — REST APIs
+ */
 function createRepoClient(cfg) {
-    return cfg.provider === "git" ? createGitProvider(cfg) : createRestProvider(cfg);
+    if (cfg.provider === "git" || cfg.provider === "isogit") return createIsoGitProvider(cfg);
+    if (cfg.provider === "git-cli") return createGitProvider(cfg);
+    if (cfg.provider !== "git-auto") return createRestProvider(cfg);
+
+    let chosen = null;
+    async function pick() {
+        if (chosen) return chosen;
+        const cli = await new Promise((resolve) => {
+            execFile("git", ["--version"], { timeout: 10000 }, (err) => resolve(!err));
+        });
+        chosen = cli ? createGitProvider(cfg) : createIsoGitProvider(cfg);
+        console.log(`[repo-client] using ${cli ? "git CLI" : "isomorphic-git (no git binary on this runtime)"}`);
+        return chosen;
+    }
+    return {
+        provider: "git",
+        engine: () => (chosen ? (chosen.engine || "git-cli") : "pending"),
+        async test() {
+            const p = await pick();
+            const r = await p.test();
+            return { engine: p.engine || "git-cli", ...r };
+        },
+        async readFiles(paths) { return (await pick()).readFiles(paths); },
+        async writeFiles(files, opts) { return (await pick()).writeFiles(files, opts); }
+    };
 }
 
 module.exports = { createRepoClient };

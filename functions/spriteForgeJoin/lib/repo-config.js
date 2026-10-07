@@ -68,6 +68,13 @@ function load() {
     const webBranchTemplate = str("REPO_WEB_BRANCH_URL", "{base}/{project}#/tree/{branch}");
     const authorName  = str("REPO_COMMIT_AUTHOR_NAME", "SpriteForge Icon Tool");
     const authorEmail = str("REPO_COMMIT_AUTHOR_EMAIL", "spriteforge@zohocorp.com");
+    // Per network round-trip limit for the git client, and the overall limit a request waits
+    // for the repository before answering with an error (keep it under the platform timeout).
+    // Who may commit to the repository (the push itself uses the shared REPO_TOKEN).
+    // Comma separated: emails (a@zohocorp.com), domains (@zohocorp.com) or * for every signed-in user.
+    const commitUsers = list("REPO_COMMIT_USERS", ["*"]).map((x) => x.toLowerCase());
+    const httpTimeoutMs = Math.max(3000, parseInt(str("REPO_HTTP_TIMEOUT_MS", "20000"), 10) || 20000);
+    const requestTimeoutMs = Math.max(5000, parseInt(str("REPO_REQUEST_TIMEOUT_MS", "25000"), 10) || 25000);
 
     const fileEntries = files.map((repoPath) => {
         const name = path.posix.basename(repoPath);
@@ -101,9 +108,27 @@ function load() {
         requireLogin,
         authorName,
         authorEmail,
+        httpTimeoutMs,
+        requestTimeoutMs,
+        commitUsers,
         webUrl: fill(webBranchTemplate, { base: baseUrl, project: projectPath, branch, repo: repoName, path: "" }),
         isConfigured: !!token
     };
+}
+
+/**
+ * Is this signed-in user allowed to commit? user: { email }
+ * @returns {boolean}
+ */
+function canCommit(cfg, user) {
+    const rules = (cfg && cfg.commitUsers) || ["*"];
+    const email = String((user && user.email) || "").trim().toLowerCase();
+    return rules.some((r) => {
+        if (r === "*") return true;
+        if (!email) return false;
+        if (r.charAt(0) === "@") return email.endsWith(r);
+        return email === r;
+    });
 }
 
 function fill(template, vars) {
@@ -128,4 +153,4 @@ function publicConfig(cfg) {
     };
 }
 
-module.exports = { load, publicConfig, DEFAULT_FILES, DEFAULT_PAIRS };
+module.exports = { load, publicConfig, canCommit, DEFAULT_FILES, DEFAULT_PAIRS };

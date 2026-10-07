@@ -21,10 +21,16 @@
  *   GET  /file?name=x.svg  → raw file content (from the repository cache)
  *   POST /save             → { files:[{name, content}], message } → commit + push
  *   POST /test-connection  → verify token / branch
+ *   GET  /diagnose         → public reachability check (no secrets): git binary, DNS, HTTPS to the git host
  */
 
+const fs = require("fs");
+const os = require("os");
+const dns = require("dns");
+const https = require("https");
 const path = require("path");
 const express = require("express");
+const { execFile } = require("child_process");
 
 const repoConfig = require("../lib/repo-config");
 const { createRepoClient } = require("../lib/repo-client");
@@ -93,8 +99,22 @@ function createMasterLibraryRouter(deps) {
         return inflight;
     }
 
+    /** Answer within the request deadline even if the repository hangs (the fetch keeps going). */
+    function withDeadline(promise, what) {
+        const ms = cfg.requestTimeoutMs;
+        let timer;
+        const limit = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(Object.assign(
+                new Error(`${what}: the repository did not answer within ${Math.round(ms / 1000)} s. Open /api/master-library/diagnose to check whether ${hostOf(cfg.gitUrl)} is reachable from this server.`),
+                { status: 504 })), ms);
+        });
+        return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+    }
+
+    function hostOf(u) { try { return new URL(u).host; } catch (_) { return String(u); } }
+
     async function ensureLoaded(force) {
-        if (force || !cache.fetchedAt) await fetchFromRepo();
+        if (force || !cache.fetchedAt) await withDeadline(fetchFromRepo(), "Reading the repository");
         return cache;
     }
 
@@ -102,6 +122,17 @@ function createMasterLibraryRouter(deps) {
         const cur = deps.getSession(req);
         const u = cur && cur.session && cur.session.user;
         return u ? { name: u.name || "", email: u.email || "" } : null;
+    }
+
+    function commitAccess(req) {
+        const user = userOf(req);
+        const allowed = repoConfig.canCommit(cfg, user);
+        return {
+            canCommit: allowed,
+            commitUser: user ? (user.email || user.name || null) : null,
+            commitRestrictedReason: allowed ? null
+                : `${(user && user.email) || "Your account"} does not have commit access to ${cfg.repoName} (${cfg.branch}). Ask a maintainer to add you to REPO_COMMIT_USERS.`
+        };
     }
 
     function listing() {
@@ -132,15 +163,18 @@ function createMasterLibraryRouter(deps) {
     const gate = (req, res, next) => (cfg.requireLogin ? deps.requireSession(req, res, next) : next());
 
     // ── routes ─────────────────────────────────────────────────────────────
+    const engineOf = () => (typeof client.engine === "function" ? client.engine() : (client.engine || client.provider));
+
     router.get("/config", (req, res) => {
-        res.json({ success: true, ...repoConfig.publicConfig(cfg) });
+        // engine: "git-cli" | "isomorphic-git" | "pending" (decided on first repository call)
+        res.json({ success: true, ...repoConfig.publicConfig(cfg), engine: engineOf(), lastError: cache.error || null });
     });
 
     router.get("/", gate, async (req, res) => {
         const force = String(req.query.refresh || "") === "1";
         try {
             await ensureLoaded(force);
-            res.json({ success: true, ...listing() });
+            res.json({ success: true, ...listing(), ...commitAccess(req) });
         } catch (err) {
             console.error("[master-library] list:", err.message);
             // Still answer with whatever is cached so the UI can show the error next to stale data.
@@ -150,9 +184,9 @@ function createMasterLibraryRouter(deps) {
 
     router.post("/sync", gate, async (req, res) => {
         try {
-            await fetchFromRepo();
+            await withDeadline(fetchFromRepo(), "Sync");
             const l = listing();
-            res.json({ success: true, synced: l.files.map((f) => f.name), ...l });
+            res.json({ success: true, synced: l.files.map((f) => f.name), ...l, ...commitAccess(req) });
         } catch (err) {
             console.error("[master-library] sync:", err.message);
             res.status(err.status || 502).json({ success: false, message: err.message, ...listing() });
@@ -182,6 +216,11 @@ function createMasterLibraryRouter(deps) {
     router.post("/save", gate, async (req, res) => {
         try {
             if (!cfg.isConfigured) throw notConfigured();
+            const access = commitAccess(req);
+            if (!access.canCommit) {
+                console.warn(`[master-library] commit refused for ${access.commitUser || "unknown user"}`);
+                return res.status(403).json({ success: false, restricted: true, message: access.commitRestrictedReason, ...access });
+            }
             const body  = req.body || {};
             const files = Array.isArray(body.files) ? body.files : [];
             if (!files.length) return res.status(400).json({ success: false, message: "No files supplied" });
@@ -196,14 +235,14 @@ function createMasterLibraryRouter(deps) {
             }
 
             const user = userOf(req) || { name: "SpriteForge user", email: "" };
-            const repoResult = await client.writeFiles(
+            const repoResult = await withDeadline(client.writeFiles(
                 prepared.map((p) => ({ repoPath: p.meta.repoPath, content: p.buf })),
                 {
                     message: body.message || `Update ${prepared.map((p) => p.meta.name).join(", ")} via SpriteForge (${user.name || user.email})`,
                     authorName:  user.name  || cfg.authorName,
                     authorEmail: user.email || cfg.authorEmail
                 }
-            );
+            ), "Commit");
 
             // The repository now holds exactly what was pushed — mirror it in the cache.
             const now = new Date().toISOString();
@@ -238,11 +277,75 @@ function createMasterLibraryRouter(deps) {
 
     router.post("/test-connection", gate, async (req, res) => {
         try {
-            const r = await client.test();
-            res.status(r.ok ? 200 : 502).json({ success: !!r.ok, ...r, branch: cfg.branch, gitUrl: cfg.provider === "git" ? cfg.gitUrl : undefined });
+            const r = await withDeadline(client.test(), "Connection test");
+            res.status(r.ok ? 200 : 502).json({ success: !!r.ok, ...r, engine: r.engine || engineOf(), branch: cfg.branch, gitUrl: cfg.provider === "git" ? cfg.gitUrl : undefined });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
         }
+    });
+
+    // ── public diagnostics (no session, no secrets) ─────────────────────────
+    function timed(fn, ms) {
+        const t0 = Date.now();
+        let timer;
+        return Promise.race([
+            Promise.resolve().then(fn),
+            new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`timed out after ${ms} ms`)), ms); })
+        ]).then((v) => ({ ok: true, ms: Date.now() - t0, ...v }), (e) => ({ ok: false, ms: Date.now() - t0, error: e.message }))
+          .finally(() => clearTimeout(timer));
+    }
+
+    function httpsStatus(url, headers, ms) {
+        return new Promise((resolve, reject) => {
+            const req = https.get(url, { headers: { "User-Agent": "git/2.40 SpriteForge-diagnose", ...(headers || {}) }, timeout: ms }, (r) => {
+                r.resume();
+                resolve({ status: r.statusCode });
+            });
+            req.on("timeout", () => req.destroy(new Error(`no answer within ${ms} ms`)));
+            req.on("error", reject);
+        });
+    }
+
+    router.get("/diagnose", async (req, res) => {
+        const host = hostOf(cfg.gitUrl);
+        const refsUrl = cfg.gitUrl.replace(/\/+$/, "") + "/info/refs?service=git-upload-pack";
+        const auth = cfg.token ? { Authorization: "Basic " + Buffer.from(`${cfg.tokenUser}:${cfg.token}`).toString("base64") } : null;
+        const tmp = os.tmpdir();
+        const [gitCli, lookup, anon, authed] = await Promise.all([
+            timed(() => new Promise((resolve, reject) => execFile("git", ["--version"], { timeout: 5000 }, (e, out) => (e ? reject(new Error(e.code === "ENOENT" ? "git binary not installed" : e.message)) : resolve({ version: String(out).trim() })))), 6000),
+            timed(() => dns.promises.lookup(host).then((a) => ({ address: a.address })), 6000),
+            timed(() => httpsStatus(refsUrl, null, 8000), 9000),
+            auth ? timed(() => httpsStatus(refsUrl, auth, 8000), 9000) : Promise.resolve({ ok: false, error: "REPO_TOKEN not set" })
+        ]);
+        let tmpWritable = false;
+        try { const f = path.join(tmp, `sf-diag-${process.pid}`); fs.writeFileSync(f, "x"); fs.unlinkSync(f); tmpWritable = true; } catch (_) {}
+        const reachable = anon.ok || authed.ok;
+        // ?read=1 → really read the branch with the configured engine (names, sizes and commit only).
+        let read = null;
+        if (String(req.query.read || "") === "1") {
+            read = await timed(async () => {
+                await withDeadline(fetchFromRepo(), "Diagnose read");
+                return { commit: cache.commit, files: [...cache.files.entries()].map(([n, e]) => ({ name: n, size: e.content.length })), missing: cache.missing };
+            }, cfg.requestTimeoutMs + 2000);
+        }
+        res.json({
+            success: true,
+            gitHost: host,
+            branch: cfg.branch,
+            engine: engineOf(),
+            runtime: { node: process.version, platform: process.platform, tmpdir: tmp, tmpWritable },
+            gitCli,
+            dns: lookup,
+            httpsAnonymous: anon,     // expect status 401 (host reachable, auth required)
+            httpsWithToken: authed,   // expect status 200 (token accepted)
+            read,
+            lastError: cache.error || null,
+            hint: !lookup.ok ? `DNS lookup for ${host} failed on this server — the host is not resolvable from here (internal network only?).`
+                : !reachable ? `${host} resolves but does not answer HTTPS from this server — it is likely only reachable inside the Zoho corporate network.`
+                : authed.ok && authed.status === 401 ? "Host reachable, but the token was rejected (check REPO_TOKEN / REPO_TOKEN_USER)."
+                : authed.ok && authed.status === 200 ? "Host reachable and token accepted."
+                : "Host reachable."
+        });
     });
 
     return router;

@@ -374,3 +374,12 @@ select.form-input {
   appearance: auto;
   -webkit-appearance: menulist;
 }
+
+.ml-restricted-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--danger);
+}
+.ml-restricted-hint svg { flex: 0 0 auto; margin-top: 2px; }

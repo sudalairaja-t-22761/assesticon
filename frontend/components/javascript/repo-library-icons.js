@@ -47,6 +47,7 @@
         url: _url('api/master-library/file?name=' + encodeURIComponent(name)),
         type: 'GET',
         dataType: 'text',
+        timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000,
         headers: _headers(),
         success: function (text, _s, xhr) { resolve({ text: text || '', commit: xhr.getResponseHeader('X-Repo-Commit') || null }); },
         error: function (xhr) {
@@ -64,10 +65,13 @@
         url: _url('api/master-library'),
         type: 'GET',
         dataType: 'json',
+        timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000,
         headers: _headers(),
         success: resolve,
-        error: function (xhr) {
-          var e = new Error((xhr.responseJSON && xhr.responseJSON.message) || 'Could not read the repository');
+        error: function (xhr, status) {
+          var e = new Error(typeof SF.masterLibraryXhrMessage === 'function'
+            ? SF.masterLibraryXhrMessage(xhr, status, 'Could not read the repository')
+            : ((xhr.responseJSON && xhr.responseJSON.message) || 'Could not read the repository'));
           e.status = xhr.status;
           reject(e);
         }
@@ -188,6 +192,10 @@
     _renderStatus();
 
     var job = _getListing().then(function (listing) {
+      if (listing && 'canCommit' in listing && state.masterLibrary) {
+        state.masterLibrary.canCommit = !!listing.canCommit;
+        state.masterLibrary.commitRestrictedReason = listing.commitRestrictedReason || null;
+      }
       var commit = (listing && listing.lastCommit) || null;
       if (!force && r.icons.length && commit && commit === r.commit) return r.icons; // unchanged
 
