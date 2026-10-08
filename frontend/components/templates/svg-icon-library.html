@@ -21,18 +21,7 @@
           Upload Icons
         </button>
       </div>
-      <div class="upload-box upload-box-main" id="libSpriteDropZone">
-        <div class="upload-icon upload-icon-lg">
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-          </svg>
-        </div>
-        <p class="upload-label">Use Upload Icons to add individual icons directly to Library</p>
-        <p class="upload-hint">Icons appear as separate items in the Library list below</p>
-        <input type="file" accept=".svg" class="file-input">
-        <div class="upload-status" id="libSpriteStatus"></div>
-      </div>
+      <p class="upload-hint" style="margin:0;">Upload Icons opens a window: drop SVG files, set each icon name, then Submit. The icons are committed to Sprite/crmutil_icons.svg in the Iconassest repository.</p>
     </div>
   </div>
 
@@ -103,6 +92,39 @@
       <div class="lib-grid lib-grid-medium" id="libGrid">
         <!-- Rendered by JS -->
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Library upload window: drag & drop SVGs, name them, Submit -->
+<div class="modal-overlay hidden" id="libUploadModal">
+  <div class="modal-overlay-bg"></div>
+  <div class="modal lib-upload-modal">
+    <div class="modal-header">
+      <h3>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Upload Icons to Library
+      </h3>
+      <button class="modal-close" id="libUploadClose" type="button">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="upload-box lib-upload-drop" id="libUploadDrop">
+        <div class="upload-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        </div>
+        <p class="upload-label">Drag &amp; drop SVG files here, or click to browse</p>
+        <p class="upload-hint">One or more .svg files</p>
+        <input type="file" id="libUploadInput" accept=".svg,image/svg+xml" multiple hidden>
+      </div>
+      <div class="lib-upload-list" id="libUploadList"></div>
+      <div class="upload-status" id="libUploadStatus"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="libUploadCancel" type="button">Cancel</button>
+      <button class="btn btn-primary" id="libUploadSubmit" type="button" disabled>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+        Submit
+      </button>
     </div>
   </div>
 </div>

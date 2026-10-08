@@ -252,8 +252,22 @@
     }
 
     if (storedSessionId) {
-      return _validateHostedSession().catch(function () {
-        _clearAuthState();
+      var _validate = function () { return _validateHostedSession(); };
+      var _isAuthRejection = function (e) {
+        var st = e && e.response && e.response.status;
+        return st === 401 || st === 403;
+      };
+      // Only sign out when the server rejects the session; retry on transient
+      // failures (cold start, network blip) so a refresh does not log the user out.
+      return _validate().catch(function (e) {
+        if (_isAuthRejection(e)) return Promise.reject(e);
+        return new Promise(function (r) { setTimeout(r, 1200); }).then(_validate);
+      }).catch(function (e) {
+        if (_isAuthRejection(e)) {
+          _clearAuthState();
+        } else {
+          _setAuthState(storedSessionId, null, null); // keep session; server unreachable
+        }
         _updateAuthUi();
         return false;
       });
@@ -1161,7 +1175,7 @@
     });
 
     // ---- File Upload Zones ----
-    $(document).on('click', '#uploadIconsBtn, #libUploadIconsBtn', function (e) {
+    $(document).on('click', '#uploadIconsBtn', function (e) {
       e.preventDefault();
       e.stopPropagation();
       pendingUploadIconName = '';
@@ -2104,29 +2118,6 @@
     $('#iconLibraryBtn').on('click', function () {
       SF.switchPage('iconlibrary');
     });
-
-    // Library sprite upload (drop zone)
-    (function () {
-      var $zone = $('#libSpriteDropZone');
-      var $input = $zone.find('.file-input');
-
-      $zone.on('click', function () { $input.trigger('click'); });
-      $input.on('click', function (e) { e.stopPropagation(); });
-      $input.on('change', function () {
-        if (this.files && this.files[0]) SF.handleLibrarySpriteFile(this.files[0]);
-      });
-
-      $zone.on('dragover', function (e) {
-        e.preventDefault();
-        $zone.addClass('drag-over');
-      }).on('dragleave drop', function () {
-        $zone.removeClass('drag-over');
-      }).on('drop', function (e) {
-        e.preventDefault();
-        var files = e.originalEvent.dataTransfer.files;
-        if (files && files[0]) SF.handleLibrarySpriteFile(files[0]);
-      });
-    })();
 
     // Library search
     $('#libSearch').on('input', function () {

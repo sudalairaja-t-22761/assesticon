@@ -383,6 +383,92 @@
     if (this.files && this.files.length) SF.addIconsToIconRepo(this.files);
   });
 
+  // ── Library "Upload Icons" window: drop SVGs, name them, Submit ──────────
+
+  var _up = [];  // [{ file, text, name }]
+
+  function _escHtml(t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  function _isDup(name) {
+    var id = ('zcicn-' + SF.cleanFileName(name)).toLowerCase();
+    return (SF.libState && SF.libState.repoIcons || []).some(function (i) { return String(i.symbolId || '').toLowerCase() === id; });
+  }
+
+  function _upRender() {
+    var seen = {}, ok = _up.length > 0;
+    $('#libUploadList').html(_up.map(function (u, i) {
+      var key = SF.cleanFileName(u.name || '');
+      var dup = !!key && (_isDup(u.name) || seen[key]);
+      var empty = !key;
+      if (key) seen[key] = true;
+      if (dup || empty) ok = false;
+      var prev = u.text.replace(/<\?xml[^>]*\?>/, '').replace(/<!--[\s\S]*?-->/g, '');
+      return '<div class="lib-upload-row' + (dup ? ' is-dup' : '') + '" data-i="' + i + '">' +
+        '<div class="lib-upload-prev">' + prev + '</div>' +
+        '<input type="text" class="form-input lib-upload-name" value="' + _escHtml(u.name) + '" placeholder="Icon name" autocomplete="off" spellcheck="false">' +
+        (dup ? '<span class="lib-upload-note">already in Library</span>' : '') +
+        '<button type="button" class="lib-upload-remove" title="Remove">&times;</button></div>';
+    }).join(''));
+    $('#libUploadSubmit').prop('disabled', !ok);
+  }
+
+  function _upAdd(fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
+    var svgs = files.filter(function (f) { return /\.svg$/i.test(f.name); });
+    if (files.length && svgs.length < files.length) $('#libUploadStatus').text('Only .svg files were added.').attr('class', 'upload-status error');
+    else $('#libUploadStatus').text('').attr('class', 'upload-status');
+    _readFiles(svgs).then(function (items) {
+      items.forEach(function (it) {
+        if (_up.some(function (u) { return u.file === it.name && u.text === it.text; })) return;
+        _up.push({ file: it.name, text: it.text, name: SF.cleanFileName(it.name) });
+      });
+      _upRender();
+    });
+  }
+
+  function _upClose() { $('#libUploadModal').addClass('hidden'); _up = []; $('#libUploadList').empty(); }
+
+  $(document).on('click', '#libUploadIconsBtn', function (e) {
+    e.preventDefault();
+    _up = []; _upRender();
+    $('#libUploadStatus').text('').attr('class', 'upload-status');
+    $('#libUploadModal').removeClass('hidden');
+  });
+  $(document).on('click', '#libUploadClose, #libUploadCancel, #libUploadModal .modal-overlay-bg', _upClose);
+  $(document).on('click', '#libUploadDrop', function () { $('#libUploadInput').val('').trigger('click'); });
+  $(document).on('click', '#libUploadInput', function (e) { e.stopPropagation(); });
+  $(document).on('change', '#libUploadInput', function () { _upAdd(this.files); });
+  $(document).on('dragover dragenter', '#libUploadDrop', function (e) { e.preventDefault(); $(this).addClass('drag-over'); });
+  $(document).on('dragleave drop', '#libUploadDrop', function () { $(this).removeClass('drag-over'); });
+  $(document).on('drop', '#libUploadDrop', function (e) { e.preventDefault(); _upAdd(e.originalEvent.dataTransfer.files); });
+  $(document).on('input', '.lib-upload-name', function () {
+    var i = +$(this).closest('.lib-upload-row').data('i');
+    if (_up[i]) _up[i].name = $(this).val();
+    var pos = this.selectionStart, id = $(this).closest('.lib-upload-row').index();
+    _upRender();
+    var el = $('#libUploadList .lib-upload-row').eq(id).find('input')[0];
+    if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (_) {} }
+  });
+  $(document).on('click', '.lib-upload-remove', function () {
+    _up.splice(+$(this).closest('.lib-upload-row').data('i'), 1);
+    _upRender();
+  });
+  $(document).on('click', '#libUploadSubmit', function () {
+    var $btn = $(this);
+    var items = _up.map(function (u) { return { name: SF.cleanFileName(u.name), text: u.text }; });
+    if (!items.length || $btn.is(':disabled')) return;
+    $btn.prop('disabled', true).addClass('is-busy');
+    $('#libUploadStatus').text('Adding to ' + (_cfg().repoName || 'repository') + '…').attr('class', 'upload-status');
+    SF.addItemsToIconRepo(items, false).then(function (res) {
+      $btn.removeClass('is-busy');
+      if (res && res.ok) { _upClose(); }
+      else {
+        $('#libUploadStatus').text((res && res.error) || 'Could not add icons').attr('class', 'upload-status error');
+        _upRender();
+      }
+    });
+  });
+
   // ── public API ──────────────────────────────────────────────────────────
 
   function _publish() {

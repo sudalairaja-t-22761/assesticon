@@ -271,8 +271,6 @@ const ALLOWED_AVATAR_HOST_REGEX = (() => {
     } catch (_) { return /(^|\.)zoho\.in$/i; }
 })();
 
-const sessions = new Map();
-
 function decodeJwtPayload(token) {
     if (!token || token.split(".").length < 2) return null;
     try {
@@ -286,13 +284,40 @@ function decodeJwtPayload(token) {
     }
 }
 
+// Sessions are stateless HMAC-signed tokens so they survive serverless cold
+// starts and work across instances (an in-memory Map loses them on refresh).
+const SESSION_SECRET = process.env.SESSION_SECRET || ZOHO_CLIENT_SECRET || "";
+const avatarCache = new Map(); // best-effort only; avatar is too large for a header token
+
+function b64url(buf) {
+    return Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function signSessionBody(body) {
+    return b64url(crypto.createHmac("sha256", SESSION_SECRET).update(body).digest());
+}
+
 function createSession(payload) {
-    const sessionId = crypto.randomUUID();
-    sessions.set(sessionId, {
-        ...payload,
-        createdAt: Date.now(),
-        lastSeen: Date.now()
-    });
+    const user = payload.user || {};
+    const pz = payload.zohoProfile || {};
+    const data = {
+        user: {
+            id: user.id || null,
+            email: user.email || null,
+            name: user.name || null,
+            picture: user.picture || null,
+            avatar: null,
+            avatarHash: user.avatarHash || null
+        },
+        zohoProfile: { sub: pz.sub || null, email: pz.email || null, name: pz.name || null },
+        createdAt: Date.now()
+    };
+    const body = b64url(JSON.stringify(data));
+    const sessionId = body + "." + signSessionBody(body);
+    if (user.avatar) {
+        avatarCache.set(sessionId, user.avatar);
+        if (avatarCache.size > 200) avatarCache.delete(avatarCache.keys().next().value);
+    }
     return sessionId;
 }
 
@@ -302,17 +327,22 @@ function getSession(req) {
         ? req.query.session_id
         : "";
     const sessionId = headerSessionId || querySessionId;
-    if (!sessionId || typeof sessionId !== "string") return null;
+    if (!sessionId || typeof sessionId !== "string" || !SESSION_SECRET) return null;
 
-    const session = sessions.get(sessionId);
-    if (!session) return null;
+    const dot = sessionId.indexOf(".");
+    if (dot < 1) return null;
+    const body = sessionId.slice(0, dot);
+    const sig = Buffer.from(sessionId.slice(dot + 1));
+    const expected = Buffer.from(signSessionBody(body));
+    if (sig.length !== expected.length || !crypto.timingSafeEqual(sig, expected)) return null;
 
-    if (Date.now() - session.createdAt > SESSION_TTL_MS) {
-        sessions.delete(sessionId);
-        return null;
-    }
+    let session;
+    try { session = JSON.parse(Buffer.from(body.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); }
+    catch (_) { return null; }
+    if (!session || Date.now() - session.createdAt > SESSION_TTL_MS) return null;
 
-    session.lastSeen = Date.now();
+    const cached = avatarCache.get(sessionId);
+    if (cached) session.user.avatar = cached;
     return { sessionId, session };
 }
 
@@ -553,7 +583,7 @@ app.get("/api/auth/session", (req, res) => {
 app.post("/api/auth/logout", (req, res) => {
     const sessionId = req.headers["x-session-id"];
     if (sessionId && typeof sessionId === "string") {
-        sessions.delete(sessionId);
+        avatarCache.delete(sessionId);
     }
     res.status(200).json({ success: true, message: "Logged out" });
 });
