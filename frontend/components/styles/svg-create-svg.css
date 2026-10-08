@@ -1,0 +1,80 @@
+/* ─── Create SVG page (image → SVG icon) ─── */
+#createSvgPage { padding: 0; }
+
+.csv-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) 1fr;
+  gap: 16px;
+  padding: 16px 0 0;
+  align-items: start;
+}
+@media (max-width: 900px) { .csv-layout { grid-template-columns: 1fr; } }
+.csv-col { margin: 0; }
+.csv-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+
+.csv-drop {
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  padding: 18px 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.csv-drop:hover, .csv-drop:focus, .csv-drop.drag { border-color: var(--accent); background: var(--accent-subtle); outline: none; }
+.csv-drop p { margin: 8px 0 4px; font-size: 12px; }
+.csv-drop svg { color: var(--accent); }
+.csv-drop img { max-width: 100%; max-height: 110px; image-rendering: auto; background:
+  conic-gradient(var(--border-light) 25%, transparent 0 50%, var(--border-light) 0 75%, transparent 0) 0 0/12px 12px; border-radius: 3px; }
+.csv-hint { display: block; font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
+
+.csv-field { display: flex; flex-direction: column; gap: 6px; }
+.csv-field > label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.csv-field > label b { color: var(--accent); font-weight: 600; margin-left: 4px; }
+.csv-field select, .csv-name-wrap {
+  background: var(--bg-input); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 12px; padding: 7px 9px; font-family: inherit;
+}
+.csv-field select:focus, .csv-name-wrap:focus-within { border-color: var(--border-focus); outline: none; box-shadow: 0 0 0 2px var(--accent-glow); }
+.csv-name-wrap { display: flex; align-items: center; gap: 2px; padding: 0 9px; }
+.csv-name-wrap span { color: var(--text-tertiary); }
+.csv-name-wrap input { flex: 1; border: 0; background: transparent; color: var(--text-primary); font-size: 12px; padding: 7px 0; outline: none; font-family: inherit; }
+.csv-field input[type=range] { width: 100%; accent-color: var(--accent); }
+
+.csv-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }
+.csv-check input { accent-color: var(--accent); }
+
+.csv-seg { display: flex; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; align-items: stretch; }
+.csv-seg-btn {
+  flex: 1; padding: 7px 10px; font-size: 12px; font-weight: 600; font-family: inherit;
+  background: var(--bg-panel); color: var(--text-secondary); border: 0; cursor: pointer;
+  border-right: 1px solid var(--border); transition: background .12s, color .12s;
+}
+.csv-seg-btn:last-of-type { border-right: 0; }
+.csv-seg-btn:hover { background: var(--bg-hover); }
+.csv-seg-btn.active { background: var(--accent); color: var(--text-on-accent); }
+.csv-tabs { margin-top: 4px; }
+.csv-tabs .csv-copy { border-radius: 0; border: 0; border-left: 1px solid var(--border); flex: 0 0 auto; }
+
+.csv-preview-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.csv-preview-box {
+  width: 220px; height: 220px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-panel); color: var(--text-primary);
+}
+.csv-preview-box svg { width: 100%; height: 100%; display: block; }
+.csv-sizes { display: flex; flex-direction: column; gap: 10px; color: var(--text-primary); }
+.csv-sizes .csv-size-row { display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--text-tertiary); }
+.csv-sizes .csv-size-row svg { flex-shrink: 0; }
+.csv-stats { font-size: 11px; color: var(--text-tertiary); }
+
+.csv-code {
+  margin: 0; max-height: 280px; overflow: auto;
+  background: var(--bg-code); color: var(--text-code);
+  border-radius: var(--radius-sm); padding: 12px 14px;
+  font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; word-break: break-all;
+}

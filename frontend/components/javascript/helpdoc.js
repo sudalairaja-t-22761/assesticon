@@ -19,6 +19,8 @@
     $('#webfontBtn').removeClass('active');
     $('#savedWebfontsPage').addClass('hidden');
     $('#savedWebfontsBtn').removeClass('active');
+    $('#createSvgPage').addClass('hidden');
+    $('#createSvgBtn').removeClass('active');
 
     if (page === 'helpdoc') {
       $('.content').first().addClass('hidden');
@@ -159,6 +161,31 @@
         $('#docRightPanel').addClass('hidden');
         $('.main').removeClass('has-right-panel');
       }
+    } else if (page === 'createsvg') {
+      $('.content').first().addClass('hidden');
+      $('#helpDocPage').addClass('hidden');
+      $('#iconLibraryPage').addClass('hidden');
+      $('#mostUsedPage').addClass('hidden');
+      $('#requestIconPage').addClass('hidden');
+      $('#savedSpritesPage').addClass('hidden');
+      $('#createSvgPage').removeClass('hidden');
+      $('#createSvgBtn').addClass('active');
+      $('#helpDocBtn').removeClass('active');
+      $('#iconLibraryBtn').removeClass('active');
+      $('#mostUsedBtn').removeClass('active');
+      $('#requestIconNavBtn').removeClass('active');
+      $('#savedSpritesBtn').removeClass('active');
+      $('.sidebar-link[data-mode]').removeClass('active');
+      $('#pageTitle').text('Create SVG');
+      $('#pageBreadcrumb').text('Create SVG');
+      $('#generateBtn').addClass('hidden');
+      if (typeof SF.hideDocRightPanel === 'function') {
+        SF.hideDocRightPanel();
+      } else {
+        $('#docRightPanel').addClass('hidden');
+        $('.main').removeClass('has-right-panel');
+      }
+      if (typeof SF.initCreateSvgPage === 'function') SF.initCreateSvgPage();
     } else if (page === 'savedwebfonts') {
       $('.content').first().addClass('hidden');
       $('#helpDocPage').addClass('hidden');
