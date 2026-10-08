@@ -78,3 +78,57 @@
   font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: pre-wrap; word-break: break-all;
 }
+
+/* ─── path selection / colour / group ─── */
+.csv-preview-box.csv-interactive path[data-i] { cursor: pointer; }
+.csv-paths { display: flex; flex-direction: column; gap: 8px; }
+.csv-paths-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
+.csv-paths-head .csv-hint { margin: 0; }
+.csv-path-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 96px; overflow: auto; }
+.csv-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px 3px 5px; font: 600 11px inherit; font-family: inherit;
+  color: var(--text-secondary); background: var(--bg-panel);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer;
+}
+.csv-chip i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); display: inline-block; }
+.csv-chip sup { font-size: 9px; color: var(--accent); margin-left: 1px; }
+.csv-chip:hover { border-color: var(--accent); }
+.csv-chip.sel { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent); }
+.csv-path-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.csv-path-tools input[type=color] { width: 32px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input); cursor: pointer; }
+.csv-path-tools .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ─── simplified flow ─── */
+.csv-step { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--text-primary); margin-top: 2px; }
+.csv-num { width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--text-on-accent); font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
+.csv-cards { display: flex; flex-direction: column; gap: 8px; }
+.csv-cards .csv-card {
+  flex: none; display: flex; flex-direction: column; gap: 3px; text-align: left;
+  padding: 10px 12px; background: var(--bg-panel); color: var(--text-secondary);
+  border: 1.5px solid var(--border); border-radius: var(--radius); cursor: pointer; font-family: inherit;
+}
+.csv-cards .csv-card b { font-size: 13px; color: var(--text-primary); }
+.csv-cards .csv-card span { font-size: 11.5px; line-height: 1.4; font-weight: 400; }
+.csv-cards .csv-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.csv-cards .csv-card.active { border-color: var(--accent); background: var(--accent-subtle); }
+.csv-cards .csv-card.active b { color: var(--accent); }
+.csv-change { color: var(--accent); }
+.csv-adv { border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-hover); }
+.csv-adv > summary { cursor: pointer; padding: 10px 12px; font-size: 12.5px; font-weight: 700; color: var(--text-secondary); list-style-position: inside; }
+.csv-adv > summary .csv-hint { display: inline; font-weight: 400; }
+.csv-adv-body { display: flex; flex-direction: column; gap: 14px; padding: 4px 12px 14px; }
+.csv-ends { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-tertiary); }
+.csv-tool-sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
+.csv-colour-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+
+/* ─── independent scrolling: settings (left) scroll, preview (right) stays in view ─── */
+@media (min-width: 901px) {
+  .csv-layout { align-items: start; }
+  .csv-col {
+    position: sticky; top: 0;
+    max-height: calc(100vh - 150px);
+    overflow-y: auto; overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+}

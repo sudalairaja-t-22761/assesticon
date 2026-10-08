@@ -56,11 +56,30 @@ function createMasterLibraryRouter(deps) {
 
     // ── in-memory repository cache ─────────────────────────────────────────
     // files: name → { content: Buffer, commit, updatedAt, updatedBy, source, pushError? }
-    const cache = { files: new Map(), missing: [], commit: null, commitInfo: null, fetchedAt: null, error: null };
+    const cache = { files: new Map(), missing: [], commit: null, commitInfo: null, fetchedAt: null, error: null, version: null };
     let inflight = null;
 
     function notConfigured() {
         return Object.assign(new Error("Repository token (" + (deps.tokenVar || "REPO_TOKEN") + ") is not configured on the server"), { status: 503 });
+    }
+
+    /** Exact "version" of the package.json (or configured file) at the branch tip. null when absent/unreadable. */
+    function parseVersion(r) {
+        if (!r || r.missing || !r.content) return null;
+        try {
+            const j = JSON.parse(Buffer.isBuffer(r.content) ? r.content.toString("utf8") : String(r.content));
+            if (!j || typeof j.version !== "string" || !j.version) return null;
+            return { name: typeof j.name === "string" ? j.name : null, version: j.version, file: cfg.versionFile, commit: r.commit || null };
+        } catch (_) { return null; }
+    }
+
+    /** Re-read the version after a commit (best effort — never fails the save). */
+    async function refreshVersion() {
+        if (!cfg.versionFile) return;
+        try {
+            const [r] = await withDeadline(client.readFiles([cfg.versionFile]), "Reading the version");
+            cache.version = parseVersion(r);
+        } catch (e) { console.warn("[" + tag + "] version refresh:", e.message); }
     }
 
     /** Fetch every configured file from the repository branch tip. Concurrent callers share one fetch. */
@@ -69,13 +88,16 @@ function createMasterLibraryRouter(deps) {
         if (inflight) return inflight;
         inflight = (async () => {
             try {
-                const results = await client.readFiles(cfg.files.map((f) => f.repoPath));
+                const wantVersion = !!cfg.versionFile;
+                const results = await client.readFiles(cfg.files.map((f) => f.repoPath).concat(wantVersion ? [cfg.versionFile] : []));
                 const now = new Date().toISOString();
                 const files = new Map();
                 const missing = [];
                 let info = null;
                 let commit = null;
+                let version = null;
                 for (const r of results) {
+                    if (wantVersion && r.repoPath === cfg.versionFile) { version = parseVersion(r); continue; }
                     const meta = cfg.files.find((f) => f.repoPath === r.repoPath);
                     if (!meta) continue;
                     if (r.commit) commit = r.commit;
@@ -87,6 +109,7 @@ function createMasterLibraryRouter(deps) {
                 cache.missing = missing;
                 cache.commit = commit;
                 cache.commitInfo = info;
+                cache.version = version;
                 cache.fetchedAt = now;
                 cache.error = null;
                 return cache;
@@ -154,6 +177,7 @@ function createMasterLibraryRouter(deps) {
             lastSyncAt: cache.fetchedAt,
             lastCommit: cache.commit,
             lastCommitInfo: cache.commitInfo,
+            packageVersion: cache.version,
             files,
             missing: cfg.files.filter((f) => !cache.files.has(f.name)).map((f) => f.name),
             error: cache.error
@@ -258,6 +282,7 @@ function createMasterLibraryRouter(deps) {
                 if (repoResult.changed) cache.commitInfo = { sha: repoResult.commit, date: now, author: user.name || user.email || cfg.authorName, subject: repoResult.message };
             }
             if (!cache.fetchedAt) cache.fetchedAt = now;
+            if (repoResult.changed) await refreshVersion();
 
             res.json({
                 success: true,

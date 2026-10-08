@@ -36,6 +36,7 @@
       $('#csvDropLoaded').removeClass('hidden');
       var base = file.name.replace(/\.[^.]+$/, '');
       if (!$('#csvName').data('touched') && base && base !== 'image') $('#csvName').val(base);
+      autoPickMode(im);
       schedule(0);
     };
     im.onerror = function () { toast('Could not read that image'); };
@@ -196,6 +197,29 @@
     return { cen: cen, idx: idx, bgIdx: bgIdx };
   }
 
+  // Looks at the image: mostly grey/black/white -> Single colour, otherwise Original colours.
+  function autoPickMode(im) {
+    try {
+      var cv = document.createElement('canvas'), z = 64;
+      cv.width = cv.height = z;
+      var cx = cv.getContext('2d', { willReadFrequently: true });
+      cx.drawImage(im, 0, 0, z, z);
+      var d = cx.getImageData(0, 0, z, z).data, fg = 0, col = 0;
+      for (var i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 128) continue;
+        var mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
+        if (mx > 235 && mx - mn < 30) continue;          // white-ish background
+        fg++; if (mx - mn > 45) col++;
+      }
+      var wantColor = fg > 0 && col / fg > 0.15;
+      $('#csvModeSeg .csv-seg-btn').removeClass('active').filter('[data-mode=' + (wantColor ? 'color' : 'mono') + ']').addClass('active');
+      $('#csvModeAuto').text(wantColor
+        ? 'We picked “Original colours” because your image has several colours. You can switch above.'
+        : 'We picked “Single colour” because your image is one colour. You can switch above.');
+      syncUi();
+    } catch (e) {}
+  }
+
   // ---- tracing ----
   // ---- Potrace (wasm, self-hosted) ----
   var potracePromise = null;
@@ -269,9 +293,43 @@
     var popts = { pathonly: true, extractcolors: false, alphamax: 1, opttolerance: Math.min(1, smooth * 0.2) };
     var paths = [];
 
-    async function tracePaths(canvas, turd) {
+    async function traceCanvas(canvas, turd) {
       var arr = await potrace(canvas, Object.assign({ turdsize: turd }, popts));
       return (Array.isArray(arr) ? arr : [arr]).map(function (d) { return convertPath(String(d), S, vb); }).join('');
+    }
+
+    // Traces each separate shape (connected blob, with its own holes) as its own path,
+    // so every shape can be selected / recoloured on its own. Falls back to one merged path.
+    async function traceShapes(test, turd) {
+      var lab = new Int32Array(n), areas = [0], cid = 0, st, k;
+      for (var a = 0; a < n; a++) {
+        if (lab[a] || !test(a)) continue;
+        cid++; areas[cid] = 0; st = [a]; lab[a] = cid;
+        while (st.length) {
+          k = st.pop(); areas[cid]++;
+          var kx = k % S, ky = (k / S) | 0;
+          for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {
+            var nx = kx + dx, ny = ky + dy;
+            if (nx < 0 || ny < 0 || nx >= S || ny >= S) continue;
+            var nk = ny * S + nx;
+            if (!lab[nk] && test(nk)) { lab[nk] = cid; st.push(nk); }
+          }
+        }
+      }
+      var ids = [];
+      for (var c = 1; c <= cid; c++) if (areas[c] > Math.max(turd, 1)) ids.push(c);
+      ids.sort(function (x, y) { return areas[y] - areas[x]; });
+      if (ids.length > 40) {
+        var whole = await traceCanvas(maskCanvas(S, function (j) { return lab[j] > 0; }), turd);
+        return whole ? [whole] : [];
+      }
+      var out = [];
+      for (var q2 = 0; q2 < ids.length; q2++) {
+        var id = ids[q2];
+        var d = await traceCanvas(maskCanvas(S, function (j) { return lab[j] === id; }), turd);
+        if (d) out.push(d);
+      }
+      return out;
     }
 
     if (isMono) {
@@ -285,35 +343,35 @@
         if (!bgm[i]) hist[lums[i] | 0]++;
       }
       var autoThr = otsu(hist) + (thr - 128);
-      var mc = maskCanvas(S, function (j) {
+      var ds = await traceShapes(function (j) {
         var a = px[j * 4 + 3], lum = lums[j];
         if (shapeBy === 'auto') return hasAlpha ? a > thr : (!bgm[j] && lum < autoThr);
         if (shapeBy === 'dark') return a > 127 && lum < thr;
         return a > 127 && lum > thr;
-      });
-      var dm = await tracePaths(mc, speck * 4);
-      if (dm) paths.push({ d: dm, fill: null });
+      }, speck * 4);
+      ds.forEach(function (d) { paths.push({ d: d, fill: null, orig: null, group: null }); });
     } else {
       var q = quantize(data, S, +$('#csvColors').val(), speck * 20);
       var counts = {}, order = [];
       for (i = 0; i < n; i++) { if (q.idx[i] !== q.bgIdx) counts[q.idx[i]] = (counts[q.idx[i]] || 0) + 1; }
       order = Object.keys(counts).map(Number).sort(function (a, b) { return counts[b] - counts[a]; });
       if (!$('#csvRemoveWhite').is(':checked')) {
-        paths.push({ d: 'M0 0H' + vb + 'V' + vb + 'H0z', fill: '#ffffff' });
+        paths.push({ d: 'M0 0H' + vb + 'V' + vb + 'H0z', fill: '#ffffff', orig: '#ffffff', group: null });
       }
       for (var li = 0; li < order.length; li++) {
         // stacked layers: each colour is traced together with everything drawn after it,
         // so shapes overlap slightly underneath and no gaps/seams can show
         var set = {}; order.slice(li).forEach(function (c) { set[c] = 1; });
-        var lc = maskCanvas(S, function (j) { return set[q.idx[j]] === 1 && q.idx[j] !== q.bgIdx; });
-        var dl = await tracePaths(lc, speck * 4);
+        var dls = await traceShapes(function (j) { return set[q.idx[j]] === 1 && q.idx[j] !== q.bgIdx; }, speck * 4);
         var c = q.cen[order[li]];
-        if (dl) paths.push({ d: dl, fill: '#' + [c.r, c.g, c.b].map(function (v) { return ('0' + v.toString(16)).slice(-2); }).join('') });
+        var hex = '#' + [c.r, c.g, c.b].map(function (v) { return ('0' + v.toString(16)).slice(-2); }).join('');
+        dls.forEach(function (d) { paths.push({ d: d, fill: hex, orig: hex, group: null }); });
         if (token !== traceToken) return;
       }
     }
     if (token !== traceToken) return;
     result = { paths: paths, vb: vb };
+    sel = {}; gseq = 1;
     render();
   }
 
@@ -323,17 +381,33 @@
   }
 
   // ---- output ----
-  function pathMarkup(indent) {
+  var sel = {};     // selected path indices
+  var gseq = 1;
+
+  function pathTag(pp, i, withIdx) {
     var cur = $('#csvCurrent').is(':checked');
-    return result.paths.map(function (pp) {
-      var fill = pp.fill ? ' fill="' + pp.fill + '"' : (cur ? '' : ' fill="#000000"');
-      return indent + '<path' + fill + ' d="' + pp.d + '"/>';
-    }).join('\n');
+    var fill = pp.fill ? ' fill="' + pp.fill + '"' : (cur ? '' : ' fill="#000000"');
+    return '<path' + fill + (withIdx ? ' data-i="' + i + '"' : '') + ' d="' + pp.d + '"/>';
   }
 
-  function standalone(size, grid) {
+  // Consecutive paths that share a group are wrapped in <g>; z-order is never changed.
+  function pathMarkup(indent, withIdx) {
+    var out = [], i = 0, P = result.paths, runNo = {};
+    while (i < P.length) {
+      var g = P[i].group;
+      if (!g) { out.push(indent + pathTag(P[i], i, withIdx)); i++; continue; }
+      var j = i, inner = [];
+      while (j < P.length && P[j].group === g) { inner.push(indent + '  ' + pathTag(P[j], j, withIdx)); j++; }
+      runNo[g] = (runNo[g] || 0) + 1;
+      out.push(indent + '<g id="group-' + g + (runNo[g] > 1 ? '-' + runNo[g] : '') + '">\n' + inner.join('\n') + '\n' + indent + '</g>');
+      i = j;
+    }
+    return out.join('\n');
+  }
+
+  function standalone(size, grid, withIdx) {
     var vb = result.vb, cur = $('#csvCurrent').is(':checked') || mode() === 'color';
-    var body = pathMarkup('  ');
+    var body = pathMarkup('  ', withIdx);
     var g = '';
     if (grid) {
       for (var k = 0; k <= vb; k++) {
@@ -354,9 +428,35 @@
     return '| ' + name + ' | icon-' + name + ' | ' + name.replace(/-/g, ', ') + (mode() === 'color' ? ', multicolour' : '') + ' |';
   }
 
+  function renderChips() {
+    var cnt = Object.keys(sel).length;
+    $('#csvPathsTitle').text('Shapes (' + result.paths.length + ')' + (cnt ? ' · ' + cnt + ' selected' : ''));
+    $('#csvPathList').html(result.paths.map(function (pp, i) {
+      var bg = pp.fill || 'currentColor';
+      return '<button type="button" class="csv-chip' + (sel[i] ? ' sel' : '') + (pp.group ? ' grouped' : '') + '" data-i="' + i + '" title="' + (pp.group ? 'Group ' + pp.group : 'Path ' + (i + 1)) + '">' +
+        '<i style="background:' + bg + '"></i>' + (i + 1) + (pp.group ? '<sup>g' + pp.group + '</sup>' : '') + '</button>';
+    }).join(''));
+    var first = Object.keys(sel)[0];
+    if (first != null) {
+      var f = result.paths[first].fill;
+      if (f && /^#[0-9a-f]{6}$/i.test(f)) $('#csvPathColor').val(f);
+    }
+    $('#csvPathTools .csv-needsel').prop('disabled', !cnt);
+  }
+
+  function selectPath(i, additive) {
+    var g = result.paths[i].group, members = [];
+    result.paths.forEach(function (pp, k) { if (k === i || (g && pp.group === g)) members.push(k); });
+    var on = !members.every(function (k) { return sel[k]; });
+    if (!additive) sel = {};
+    members.forEach(function (k) { if (on) sel[k] = true; else delete sel[k]; });
+    render();
+  }
+
   function render() {
     var name = cleanName();
     $('#csvDownloadLabel').text('Download icon-' + name + '.svg');
+    $('#csvPaths').toggle(!!(result && result.paths.length));
     if (!result || !result.paths.length) {
       $('#csvPreviewBox').html('<span class="csv-hint">No shape found — adjust Find the shape by or Threshold</span>');
       $('#csvSizes').empty(); $('#csvStats').text('');
@@ -364,7 +464,12 @@
       $('#csvDownloadBtn').prop('disabled', true);
       return;
     }
-    $('#csvPreviewBox').html(standalone(null, $('#csvGrid').is(':checked')));
+    var hl = Object.keys(sel).map(function (k) {
+      return '<path d="' + result.paths[k].d + '" fill="none" stroke="#2C83EC" stroke-width="1.5" stroke-dasharray="4 3" vector-effect="non-scaling-stroke" pointer-events="none"/>';
+    }).join('');
+    var prev = standalone(null, $('#csvGrid').is(':checked'), true);
+    $('#csvPreviewBox').html(prev.replace(/<\/svg>\s*$/, hl + '</svg>')).addClass('csv-interactive');
+    renderChips();
     var sizes = [16, 24, 32, 48];
     $('#csvSizes').html(sizes.map(function (s) {
       return '<div class="csv-size-row">' + standalone(s, false) + '<span>' + s + 'px</span></div>';
@@ -375,13 +480,19 @@
     $('#csvDownloadBtn').prop('disabled', false);
   }
 
+  function tabHelp() {
+    $('#csvTabHelp').text({
+      symbol: 'Paste this inside your sprite.svg file, then use it with <use href="#icon-name">.',
+      svg: 'A complete standalone SVG. Paste it into HTML or save it as a .svg file.',
+      row: 'A line for the icon list in your docs, so others can find this icon.'
+    }[tab]);
+  }
+
   function syncUi() {
+    tabHelp();
     var color = mode() === 'color';
     $('#csvShapeField, #csvThresholdField, #csvCurrentRow').toggle(!color);
     $('#csvColorsField, #csvWhiteRow').toggle(color);
-    $('#csvModeHint').text(color
-      ? 'For logos and multi-colour icons. Keeps the traced colours.'
-      : 'For normal UI icons. Uses currentColor so CSS controls the colour.');
     $('#csvThresholdVal').text($('#csvThreshold').val());
     $('#csvColorsVal').text($('#csvColors').val());
     $('#csvSmoothVal').text($('#csvSmooth').val());
@@ -421,7 +532,7 @@
   $(document).on('input', '#csvName', function () { $(this).data('touched', true); if (result) render(); });
   $(document).on('click', '#csvTabs [data-tab]', function () {
     $('#csvTabs [data-tab]').removeClass('active'); $(this).addClass('active');
-    tab = $(this).data('tab'); if (result && result.paths.length) $('#csvCode').text(codeFor(tab));
+    tab = $(this).data('tab'); tabHelp(); if (result && result.paths.length) $('#csvCode').text(codeFor(tab));
   });
   $(document).on('click', '#csvCopyBtn', function () {
     if (!result || !result.paths.length) return;
@@ -433,6 +544,36 @@
   $(document).on('click', '#csvDownloadBtn', function () {
     if (!result || !result.paths.length) return;
     SF.downloadFile(standalone(result.vb, false), 'icon-' + cleanName() + '.svg', 'image/svg+xml');
+  });
+
+  // ---- path selection / colour / grouping ----
+  $(document).on('click', '#csvPreviewBox path[data-i]', function (e) {
+    e.stopPropagation(); selectPath(+$(this).attr('data-i'), e.shiftKey || e.metaKey || e.ctrlKey);
+  });
+  $(document).on('click', '#csvPreviewBox', function () { if (result && Object.keys(sel).length) { sel = {}; render(); } });
+  $(document).on('click', '#csvPathList .csv-chip', function (e) {
+    selectPath(+$(this).attr('data-i'), e.shiftKey || e.metaKey || e.ctrlKey || true);
+  });
+  $(document).on('click', '#csvSelAll', function () { if (!result) return; sel = {}; result.paths.forEach(function (_, k) { sel[k] = true; }); render(); });
+  $(document).on('click', '#csvSelNone', function () { if (!result) return; sel = {}; render(); });
+  $(document).on('click', '#csvApplyColor', function () {
+    var c = $('#csvPathColor').val();
+    Object.keys(sel).forEach(function (k) { result.paths[k].fill = c; });
+    render();
+  });
+  $(document).on('click', '#csvResetColor', function () {
+    Object.keys(sel).forEach(function (k) { result.paths[k].fill = result.paths[k].orig; });
+    render();
+  });
+  $(document).on('click', '#csvGroupBtn', function () {
+    var ks = Object.keys(sel); if (ks.length < 2) { toast('Select two or more shapes to group'); return; }
+    var id = gseq++;
+    ks.forEach(function (k) { result.paths[k].group = id; });
+    render();
+  });
+  $(document).on('click', '#csvUngroupBtn', function () {
+    Object.keys(sel).forEach(function (k) { result.paths[k].group = null; });
+    render();
   });
 
   SF.initCreateSvgPage = syncUi;

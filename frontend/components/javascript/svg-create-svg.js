@@ -1,5 +1,5 @@
 (function () {
-  const p = fetch('components/templates/svg-create-svg.html?v=2').then(r => r.text());
+  const p = fetch('components/templates/svg-create-svg.html?v=4').then(r => r.text());
   window._componentPromises = window._componentPromises || [];
   window._componentPromises.push(p);
   class SvgCreateSvg extends HTMLElement {

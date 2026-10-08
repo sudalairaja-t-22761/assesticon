@@ -19,6 +19,9 @@
     sprites: [],       // [{ name, base, count }]
     commit: null,      // commit the icons were built from
     commitInfo: null,  // { sha, date, author, subject } of that commit
+    versionRepo: null, // repo config the version was read from
+    version: null,     // { name, version, file, commit } read from package.json at the branch tip
+    versionChecked: false, // first load of a page session always re-reads the repo
     loading: false,
     error: null,
     pending: null      // jqXHR/promise of the in-flight load
@@ -61,6 +64,29 @@
         }
       });
     });
+  }
+
+  /**
+   * "version" of package.json at the tip of the CRM_UI_LIBRARY branch (REPO_* — api/master-library).
+   * Falls back to the icon repo's own package.json when that one has none. Never throws.
+   */
+  function _loadVersion(refresh) {
+    var r = SF.repoLib;
+    return new Promise(function (resolve) {
+      $.ajax({
+        url: _url('api/master-library' + (refresh ? '?refresh=1' : '')),
+        type: 'GET',
+        dataType: 'json',
+        timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000,
+        headers: _headers(),
+        success: function (d) {
+          r.version = (d && d.packageVersion) || null;
+          r.versionRepo = (d && d.repo) || null;
+          resolve();
+        },
+        error: function () { resolve(); }
+      });
+    }).then(function () { _renderVersion(); });
   }
 
   function _getListing(refresh) {
@@ -502,6 +528,18 @@
     }
     $status.text(text).attr('title', tip).toggleClass('lib-repo-status-error', !!r.error && !r.loading);
     $('#libRepoBar').toggleClass('hidden', _signedOut());
+    _renderVersion();
+  }
+
+  function _renderVersion() {
+    var v = SF.repoLib.version, $bar = $('#libVersionBar');
+    var show = !!(v && v.version) && !_signedOut();
+    $bar.toggleClass('hidden', !show);
+    if (!show) return;
+    var cfg = SF.repoLib.versionRepo || _cfg();
+    $('#libVersionValue').text(v.version).attr('title', (v.name ? v.name + '\n' : '') + (v.file || 'package.json') +
+      (cfg.branch ? ' @ ' + cfg.branch : '') + (v.commit ? ' · ' + String(v.commit).slice(0, 8) : ''));
+    $('#libVersionName').text(v.name || (v.file || 'package.json'));
   }
 
   SF.setRepoLibraryError = function (msg) {
@@ -530,7 +568,11 @@
     r.error = null;
     _renderStatus();
 
+    if (!r.versionChecked) fresh = true;   // page (re)load: always read the latest package.json version
+    if (fresh || force) _loadVersion(true);  // refresh, sync and every commit re-read the version
     var job = _getListing(!!fresh).then(function (listing) {
+      r.versionChecked = true;
+      if (!r.version && listing && listing.packageVersion) { r.version = listing.packageVersion; r.versionRepo = listing.repo || null; }
       if (listing && listing.repo) _serverCfg = Object.assign({}, window.SF_ICON_REPO_CONFIG || {}, listing.repo);
       r.canCommit = !(listing && 'canCommit' in listing) || !!listing.canCommit;
       var commit = (listing && listing.lastCommit) || null;
@@ -586,4 +628,19 @@
     SF.loadRepoLibraryIcons(true, true).then(function () { $btn.removeClass('is-busy'); });
   });
 
+})(window.SpriteForge, jQuery);
+
+(function (SF, $) {
+  'use strict';
+  $(document).on('click', '#libVersionCopyBtn', function () {
+    var v = SF.repoLib && SF.repoLib.version && SF.repoLib.version.version;
+    if (!v) return;
+    var $btn = $(this);
+    var done = function () {
+      $btn.addClass('is-copied').find('span').text('Copied');
+      setTimeout(function () { $btn.removeClass('is-copied').find('span').text('Copy version'); }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done, function () { SF.showToast('Copy failed'); });
+    else { var ta = document.createElement('textarea'); ta.value = v; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) { SF.showToast('Copy failed'); } ta.remove(); }
+  });
 })(window.SpriteForge, jQuery);

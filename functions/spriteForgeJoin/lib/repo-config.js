@@ -35,6 +35,8 @@ const DEFAULT_PROJECT_PATH = "zohocorp/CRM/CRM_UI/CRM_UI_LIBRARY";
 const DEFAULT_REPO_NAME    = "CRM_UI_LIBRARY";
 const DEFAULT_BRANCH       = "CRM_UI_LIBRARY_ICON_TOOL";
 const DEFAULT_FOLDER       = "Master_ui_library";
+// Where the package.json with the library "version" lives in CRM_UI_LIBRARY (repo-root relative).
+const DEFAULT_VERSION_FILE = "resources/package.json";
 
 // Paths are relative to the repository root (the repo root IS the CRM_UI_LIBRARY folder).
 // The web UI shows them as <project>#/blob/<branch>/CRM_UI_LIBRARY/<path>.
@@ -60,6 +62,7 @@ const ICON_DEFAULTS = {
     repoName:    "Iconassest",
     branch:      "default",
     folder:      "Icon_library",
+    versionFile: "",                // the Iconassest repo has no package.json
     files:       ["Sprite/crmutil_icons.svg"],
     pairs:       ["crmutil_icons.svg"],
     blobTemplate:   "{base}/{project}#/source/{branch}/{repo}/{path}",
@@ -78,6 +81,8 @@ function load(opts) {
     const gitUrl      = str(P + "GIT_URL", `${str(P + "GIT_HOST", DEFAULT_GIT_HOST).replace(/\/+$/, "")}/${projectPath}.git`);
     const token       = str(P + "TOKEN", opts.tokenFallback ? str(opts.tokenFallback, "") : "");
     const tokenUser   = str(P + "TOKEN_USER", "oauth2");
+    // File (relative to the repo root) whose "version" is shown at the top of the Library. "" disables it.
+    const versionFile = str(P + "VERSION_FILE", D.versionFile !== undefined ? D.versionFile : DEFAULT_VERSION_FILE);
     const provider    = str(P + "PROVIDER", "git").toLowerCase(); // git | gitlab | gitea | github
     const files       = list(P + "FILES", D.files || DEFAULT_FILES);
     const pairs       = list(P + "SPRITE_PAIRS", D.pairs || DEFAULT_PAIRS);
@@ -120,6 +125,7 @@ function load(opts) {
         gitUrl,
         token,
         tokenUser,
+        versionFile,
         provider,
         files: fileEntries,
         pairs: pairEntries,

@@ -1050,3 +1050,22 @@
   opacity: 0.75;
 }
 .lib-card-repo .library-delete-btn:disabled { opacity: 0.35; }
+
+/* ── Library: package.json version ───────────────────────────────── */
+.lib-version-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 10px; padding: 8px 12px;
+  border: 1px solid var(--border-light); border-left: 3px solid var(--accent);
+  border-radius: 8px; background: var(--accent-subtle); color: var(--text-secondary); font-size: 12px;
+}
+.lib-version-bar.hidden { display: none; }
+.lib-version-bar svg { color: var(--accent); flex-shrink: 0; }
+.lib-version-label { font-weight: 600; }
+.lib-version-value {
+  font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-primary); background: var(--bg-panel);
+  border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px;
+  user-select: all;
+}
+.lib-version-name { flex: 1 1 auto; min-width: 0; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-version-bar .is-copied { color: var(--success); border-color: var(--success); }

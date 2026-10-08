@@ -19,83 +19,98 @@
     <div class="panel csv-col">
       <div class="panel-body csv-body">
 
+        <div class="csv-step"><span class="csv-num">1</span> Add your image</div>
         <div class="csv-drop" id="csvDrop" tabindex="0">
           <input type="file" id="csvFile" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none">
           <div id="csvDropIdle">
             <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
-            <p><strong>Drop an image</strong>, click to browse, or paste (Ctrl/Cmd+V)</p>
-            <span class="csv-hint">PNG, JPG, WebP &middot; at least 256&nbsp;px wide traces best</span>
+            <p><strong>Drop an image here</strong>, click to browse, or paste it (Ctrl/Cmd+V)</p>
+            <span class="csv-hint">PNG, JPG or WebP. Bigger images (256&nbsp;px or more) give cleaner results.</span>
           </div>
           <div id="csvDropLoaded" class="hidden">
             <img id="csvSrcThumb" alt="Source image">
             <span id="csvSrcInfo" class="csv-hint"></span>
+            <span class="csv-hint csv-change">Click to choose a different image</span>
           </div>
         </div>
 
-        <div class="csv-field">
-          <label for="csvName">Icon name</label>
-          <div class="csv-name-wrap"><span>icon-</span><input type="text" id="csvName" value="icon" maxlength="40" spellcheck="false"></div>
+        <div class="csv-step"><span class="csv-num">2</span> Choose the style</div>
+        <div class="csv-cards" id="csvModeSeg">
+          <button type="button" class="csv-seg-btn csv-card active" data-mode="mono">
+            <b>Single colour</b>
+            <span>Best for app icons. One shape that follows your text colour, so you can recolour it with CSS.</span>
+          </button>
+          <button type="button" class="csv-seg-btn csv-card" data-mode="color">
+            <b>Original colours</b>
+            <span>Best for logos and illustrations. Keeps the colours from your image.</span>
+          </button>
         </div>
+        <span class="csv-hint" id="csvModeAuto"></span>
 
-        <div class="csv-field">
-          <label>Output</label>
-          <div class="csv-seg" id="csvModeSeg">
-            <button type="button" class="csv-seg-btn active" data-mode="mono">One colour</button>
-            <button type="button" class="csv-seg-btn" data-mode="color">Keep colours</button>
+        <div class="csv-step"><span class="csv-num">3</span> Name it</div>
+        <div class="csv-name-wrap"><span>icon-</span><input type="text" id="csvName" value="icon" maxlength="40" spellcheck="false" aria-label="Icon name"></div>
+        <span class="csv-hint">Used as the icon id and the downloaded file name.</span>
+
+        <details class="csv-adv">
+          <summary>Fine-tune <span class="csv-hint">(optional &mdash; only if the result looks off)</span></summary>
+          <div class="csv-adv-body">
+
+            <div class="csv-field" id="csvShapeField">
+              <label for="csvShape">What is the icon in your image?</label>
+              <select id="csvShape">
+                <option value="auto">Detect automatically</option>
+                <option value="dark">The dark parts</option>
+                <option value="light">The light parts</option>
+              </select>
+            </div>
+
+            <div class="csv-field" id="csvThresholdField">
+              <label for="csvThreshold">Shape sensitivity <b id="csvThresholdVal">128</b></label>
+              <input type="range" id="csvThreshold" min="1" max="254" value="128">
+              <span class="csv-hint">Parts missing? Move right. Background showing? Move left.</span>
+            </div>
+
+            <div class="csv-field" id="csvColorsField" style="display:none">
+              <label for="csvColors">Number of colours <b id="csvColorsVal">8</b></label>
+              <input type="range" id="csvColors" min="2" max="24" value="8">
+              <span class="csv-hint">Fewer = flatter and simpler. More = closer to the photo.</span>
+            </div>
+
+            <div class="csv-field">
+              <label for="csvSmooth">Edge smoothness <b id="csvSmoothVal">1</b></label>
+              <input type="range" id="csvSmooth" min="0.2" max="5" step="0.1" value="1">
+              <div class="csv-ends"><span>Exact</span><span>Smoother</span></div>
+            </div>
+
+            <div class="csv-field">
+              <label for="csvSpecks">Remove tiny dots <b id="csvSpecksVal">8</b></label>
+              <input type="range" id="csvSpecks" min="0" max="60" value="8">
+              <div class="csv-ends"><span>Keep all</span><span>Remove more</span></div>
+            </div>
+
+            <div class="csv-field">
+              <label for="csvPad">Space around the icon <b id="csvPadVal">0</b>%</label>
+              <input type="range" id="csvPad" min="0" max="20" value="0">
+            </div>
+
+            <div class="csv-field">
+              <label for="csvVb">Icon grid size</label>
+              <select id="csvVb">
+                <option value="16">16</option>
+                <option value="24" selected>24 (recommended)</option>
+                <option value="32">32</option>
+                <option value="48">48</option>
+                <option value="64">64</option>
+              </select>
+            </div>
+
+            <label class="csv-check" id="csvWhiteRow" style="display:none"><input type="checkbox" id="csvRemoveWhite" checked> Remove the background</label>
+            <label class="csv-check" id="csvCurrentRow"><input type="checkbox" id="csvCurrent" checked> Let CSS control the colour</label>
+            <label class="csv-check"><input type="checkbox" id="csvGrid"> Show alignment grid in preview</label>
           </div>
-          <span class="csv-hint" id="csvModeHint">For normal UI icons. Uses currentColor so CSS controls the colour.</span>
-        </div>
-
-        <div class="csv-field" id="csvShapeField">
-          <label for="csvShape">Find the shape by</label>
-          <select id="csvShape">
-            <option value="auto">Auto (transparent PNG or dark pixels)</option>
-            <option value="dark">Dark pixels (black icon on white)</option>
-            <option value="light">Light pixels (white icon on dark)</option>
-          </select>
-        </div>
-
-        <div class="csv-field" id="csvThresholdField">
-          <label for="csvThreshold">Threshold <b id="csvThresholdVal">128</b></label>
-          <input type="range" id="csvThreshold" min="1" max="254" value="128">
-        </div>
-
-        <div class="csv-field" id="csvColorsField" style="display:none">
-          <label for="csvColors">Colours <b id="csvColorsVal">8</b></label>
-          <input type="range" id="csvColors" min="2" max="24" value="8">
-        </div>
-
-        <div class="csv-field">
-          <label for="csvSmooth">Smoothness <b id="csvSmoothVal">1</b></label>
-          <input type="range" id="csvSmooth" min="0.2" max="5" step="0.1" value="1">
-        </div>
-
-        <div class="csv-field">
-          <label for="csvSpecks">Ignore specks <b id="csvSpecksVal">8</b></label>
-          <input type="range" id="csvSpecks" min="0" max="60" value="8">
-        </div>
-
-        <div class="csv-field">
-          <label for="csvPad">Padding <b id="csvPadVal">0</b>%</label>
-          <input type="range" id="csvPad" min="0" max="20" value="0">
-        </div>
-
-        <div class="csv-field">
-          <label for="csvVb">viewBox size</label>
-          <select id="csvVb">
-            <option value="16">16</option>
-            <option value="24" selected>24</option>
-            <option value="32">32</option>
-            <option value="48">48</option>
-            <option value="64">64</option>
-          </select>
-        </div>
-
-        <label class="csv-check" id="csvWhiteRow" style="display:none"><input type="checkbox" id="csvRemoveWhite" checked> Remove white background</label>
-        <label class="csv-check" id="csvCurrentRow"><input type="checkbox" id="csvCurrent" checked> Keep currentColor for CSS</label>
-        <label class="csv-check"><input type="checkbox" id="csvGrid"> Show viewBox grid</label>
+        </details>
       </div>
     </div>
 
@@ -119,12 +134,34 @@
         </div>
         <div class="csv-stats" id="csvStats"></div>
 
+        <div class="csv-paths" id="csvPaths" style="display:none">
+          <div class="csv-paths-head">
+            <b id="csvPathsTitle">Shapes</b>
+            <span class="csv-hint">Optional: click a shape to recolour or group it. Hold Shift to pick several.</span>
+          </div>
+          <div class="csv-path-list" id="csvPathList"></div>
+          <div class="csv-path-tools" id="csvPathTools">
+            <button type="button" class="btn btn-ghost btn-sm" id="csvSelAll">Select all</button>
+            <button type="button" class="btn btn-ghost btn-sm csv-needsel" id="csvSelNone" disabled>Deselect</button>
+            <span class="csv-tool-sep"></span>
+            <label class="csv-colour-pick" title="Pick a colour, then press Change colour">
+              <input type="color" id="csvPathColor" value="#2c83ec"><span>Colour</span>
+            </label>
+            <button type="button" class="btn btn-primary btn-sm csv-needsel" id="csvApplyColor" disabled>Change colour</button>
+            <button type="button" class="btn btn-ghost btn-sm csv-needsel" id="csvResetColor" disabled>Undo colour</button>
+            <span class="csv-tool-sep"></span>
+            <button type="button" class="btn btn-ghost btn-sm csv-needsel" id="csvGroupBtn" disabled title="Treat the selected shapes as one piece">Group</button>
+            <button type="button" class="btn btn-ghost btn-sm csv-needsel" id="csvUngroupBtn" disabled>Ungroup</button>
+          </div>
+        </div>
+
         <div class="csv-seg csv-tabs" id="csvTabs">
-          <button type="button" class="csv-seg-btn active" data-tab="symbol">Sprite symbol</button>
-          <button type="button" class="csv-seg-btn" data-tab="svg">Standalone SVG</button>
-          <button type="button" class="csv-seg-btn" data-tab="row">Icon list row</button>
+          <button type="button" class="csv-seg-btn active" data-tab="symbol">Sprite code</button>
+          <button type="button" class="csv-seg-btn" data-tab="svg">SVG file code</button>
+          <button type="button" class="csv-seg-btn" data-tab="row">Icon list entry</button>
           <button type="button" class="btn btn-ghost btn-sm csv-copy" id="csvCopyBtn">Copy</button>
         </div>
+        <span class="csv-hint" id="csvTabHelp">Paste this inside your sprite.svg file.</span>
         <pre class="csv-code" id="csvCode">Nothing generated yet.</pre>
       </div>
     </div>
