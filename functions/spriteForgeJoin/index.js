@@ -110,28 +110,7 @@ function shouldUseStratus(req) {
  * We use advancedio format: wrap env vars into a fake req-like object with a
  * `headers` property so catalyst.initialize() treats it as an Advanced I/O call.
  */
-function _fakeReqFromEnv() {
-    const projectId  = process.env.ZC_PROJECT_ID  || "";
-    const projectKey = process.env.ZC_PROJECT_KEY  || "";
-    const credToken  = process.env.ZC_ADMIN_CRED_TOKEN || "";
-    const credType   = process.env.ZC_ADMIN_CRED_TYPE  || "zoho";
-    const environment = process.env.ZC_ENVIRONMENT || "development";
-    if (!projectId || !projectKey) return null;
-    return {
-        headers: {
-            "x-zc-projectid":        projectId,
-            "x-zc-project-key":      projectKey,
-            "x-zc-admin-cred-type":  credType,
-            "x-zc-admin-cred-token": credToken,
-            // SDK also requires a user-level credential. Since we are acting as admin,
-            // set the same ticket as the user token so `userToken` is not undefined.
-            "x-zc-user-cred-type":   credType,
-            "x-zc-user-cred-token":  credToken,
-            "x-zc-environment":      environment,
-            "x-zc-user-type":        "admin"   // tells SDK currentUser = admin
-        }
-    };
-}
+const { fakeReqFromEnv: _fakeReqFromEnv } = require("./lib/catalyst-local"); // local-run credentials from .env
 
 /** Bucket instance — uses admin scope so deletePath/deleteObject are allowed. */
 function stratusBucket(req) {
@@ -224,7 +203,16 @@ const ZOHO_FALLBACK_AVATAR_URL = `${ZOHO_ACCOUNTS_BASE}/oauth/user/photo`;
 const ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID || "";
 const ZOHO_CLIENT_SECRET = process.env.ZOHO_CLIENT_SECRET || "";
 const ZOHO_REDIRECT_URI = process.env.ZOHO_REDIRECT_URI || "";
-const ZOHO_SCOPE = process.env.ZOHO_SCOPE || "openid,email,profile,phone";
+// People scopes let an admin's login list the whole Zoho org (Members → Add Member); the server keeps that
+// admin's refresh token (admin_tokens table) so no token has to be put in .env.
+const ZOHO_SCOPE = (() => {
+    let scope = process.env.ZOHO_SCOPE || "openid,email,profile,phone";
+    // People = your own record + photo; Cliq = the org-wide user directory visible to every member.
+    for (const s of ["ZOHOPEOPLE.forms.READ", "ZOHOPEOPLE.employee.ALL", "ZohoCliq.Users.READ"]) {
+        if (!scope.toLowerCase().includes(s.toLowerCase())) scope += "," + s;
+    }
+    return scope;
+})();
 
 // Returns the redirect URI to use:
 // - For localhost: use the supplied origin + "/" (matches Zoho registered localhost URI)
@@ -547,6 +535,19 @@ app.post("/api/auth/zoho/callback", async (req, res) => {
         }
         console.log("[user_data] status:", userDataStatus);
 
+        // Admins only: keep the refresh token server-side (never sent to the browser) for the org user list.
+        if (tokenData.json.refresh_token && user.email) {
+            try {
+                if ((await require("./lib/roles").getRole(req, user.email)) === "admin") {
+                    const db = require("./lib/store").forRequest(req);
+                    const rows = await db.all("admin_tokens");
+                    const hit = rows.find((r) => String(r.userEmail).toLowerCase() === user.email.toLowerCase());
+                    const fields = { userEmail: user.email, refreshToken: tokenData.json.refresh_token };
+                    if (hit) await db.update("admin_tokens", hit.ROWID, fields); else await db.insert("admin_tokens", fields);
+                }
+            } catch (tokErr) { console.error("[admin_tokens] error:", tokErr.message); }
+        }
+
         res.status(200).json({
             success: true,
             sessionId,
@@ -733,6 +734,11 @@ app.use("/api/icon-library", createMasterLibraryRouter({
     tag: "icon-library",
     tokenVar: "ICON_REPO_TOKEN"
 }));
+
+// Icon verification workflow: members/roles, requests, icon status (Catalyst Data Store tables:
+// members, icon_status, icon_requests, request_events — local JSON file in dev).
+const { createWorkflowRouter } = require("./routes/workflow");
+app.use("/api", createWorkflowRouter({ requireSession }));
 
 // ===================================
 // SAVE SPRITE (new endpoint — local disk + Stratus, no Catalyst DataStore needed)

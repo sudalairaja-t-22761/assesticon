@@ -10,6 +10,6 @@
     "source": "functions"
   },
   "client": {
-    "source": "frontend"
+    "source": "frontend/dist"
   }
 }

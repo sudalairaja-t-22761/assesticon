@@ -73,10 +73,17 @@
       (icon.source === 'repo' && String(icon.symbolId || '').toLowerCase().indexOf(search) !== -1);
   }
 
+  // Verification status filter (set by workflow.js); no filter = everything.
+  function matchesStatus(icon) {
+    var f = SF.libState.statusFilter;
+    if (!f || f === 'all' || typeof SF.wfStatusOf !== 'function') return true;
+    return SF.wfStatusOf(icon) === f;
+  }
+
   function visibleLibraryIcons() {
     var search = (SF.libState.search || '').toLowerCase();
     return (SF.libState.icons || []).filter(function (icon) {
-      return icon && matchesSource(icon) && matchesSearch(icon, search);
+      return icon && matchesSource(icon) && matchesSearch(icon, search) && matchesStatus(icon);
     });
   }
 
@@ -933,6 +940,7 @@
         '</label>' +
         '<div class="lib-card-preview">' +
           '<img alt="' + SF.escapeAttr(icon.name) + ' preview" loading="lazy" decoding="async" src="' + SF.escapeAttr(previewSrc) + '">' +
+          (isRepo && typeof SF.wfBadgeHtml === 'function' ? SF.wfBadgeHtml(icon) : '') +
         '</div>' +
         '<div class="saved-folder-actions lib-icon-actions">' +
           '<button class="btn btn-ghost btn-sm library-add-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-tooltip="Add to Sprite" aria-label="Add to Sprite">' +
