@@ -150,7 +150,94 @@
     return res && res.status === 'failure' && res.data && res.data.error_code;
   }
 
+  // Make the root <svg> scale to its container: add a viewBox from width/height when missing
+  // and drop the fixed size so previews are never cropped.
+  function normalizeSvgForPreview(svgMarkup) {
+    var m = /<svg\b[^>]*>/i.exec(svgMarkup || '');
+    if (!m) return svgMarkup || '';
+    var tag = m[0];
+    var w = /\swidth\s*=\s*["']([\d.]+)(?:px)?["']/i.exec(tag);
+    var h = /\sheight\s*=\s*["']([\d.]+)(?:px)?["']/i.exec(tag);
+    var newTag = tag;
+    if (!/\sviewBox\s*=/i.test(tag) && w && h) {
+      newTag = newTag.replace(/<svg\b/i, '<svg viewBox="0 0 ' + w[1] + ' ' + h[1] + '"');
+    }
+    if (/\sviewBox\s*=/i.test(newTag)) {
+      newTag = newTag.replace(/\s(width|height)\s*=\s*["'][^"']*["']/gi, '');
+    }
+    return svgMarkup.replace(tag, newTag);
+  }
+
+  // Widen the viewBox to the artwork's real bounds so content outside the declared box isn't clipped.
+  function fitViewBoxToContent(svgMarkup) {
+    var host;
+    try {
+      host = document.createElement('div');
+      host.style.cssText = 'position:absolute;left:-99999px;top:0;width:0;height:0;overflow:hidden;visibility:hidden';
+      host.innerHTML = svgMarkup;
+      var svg = host.querySelector('svg');
+      if (!svg) return svgMarkup;
+      document.body.appendChild(host);
+      var vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+      var bb = svg.getBBox();
+      if (vb.length !== 4 || !vb.every(isFinite) || !bb || !(bb.width > 0) || !(bb.height > 0)) return svgMarkup;
+      var x0 = Math.min(vb[0], bb.x), y0 = Math.min(vb[1], bb.y);
+      var x1 = Math.max(vb[0] + vb[2], bb.x + bb.width), y1 = Math.max(vb[1] + vb[3], bb.y + bb.height);
+      if (x0 === vb[0] && y0 === vb[1] && x1 === vb[0] + vb[2] && y1 === vb[1] + vb[3]) return svgMarkup;
+      var pad = Math.max(x1 - x0, y1 - y0) * 0.02;
+      var nv = [x0 - pad, y0 - pad, x1 - x0 + 2 * pad, y1 - y0 + 2 * pad].map(function (n) { return +n.toFixed(2); }).join(' ');
+      return svgMarkup.replace(/(<svg\b[^>]*?\sviewBox\s*=\s*)(["'])[^"']*\2/i, '$1"' + nv + '"');
+    } catch (e) {
+      return svgMarkup;
+    } finally {
+      if (host && host.parentNode) host.parentNode.removeChild(host);
+    }
+  }
+
+  // Tooltip for Library tile buttons, positioned against the viewport so it is never clipped by the card or grid.
+  (function initLibraryTooltip() {
+    var tip = null;
+    function el() {
+      if (!tip) {
+        tip = document.createElement('div');
+        tip.className = 'lib-floating-tooltip';
+        document.body.appendChild(tip);
+      }
+      return tip;
+    }
+    function hide() { if (tip) tip.classList.remove('visible'); }
+    $(document)
+      .on('mouseenter focusin', '#libGrid .lib-icon-actions .btn[data-tooltip]', function () {
+        var t = el(), r = this.getBoundingClientRect();
+        t.textContent = this.getAttribute('data-tooltip');
+        t.style.left = '0px'; t.style.top = '0px';
+        var w = t.offsetWidth, h = t.offsetHeight;
+        var left = Math.max(4, Math.min(window.innerWidth - w - 4, r.left + r.width / 2 - w / 2));
+        var top = r.top - h - 8;
+        if (top < 4) top = r.bottom + 8;
+        t.style.left = left + 'px';
+        t.style.top = top + 'px';
+        t.classList.add('visible');
+      })
+      .on('mouseleave focusout click', '#libGrid .lib-icon-actions .btn[data-tooltip]', hide);
+    $(document).on('scroll wheel', hide);
+    window.addEventListener('scroll', hide, true);
+  })();
+
+  // Full-size, uncropped markup for the "View" tab.
+  // Keeps the icon's own declared size (e.g. 16x16) — only the viewBox is widened so nothing is clipped.
+  SF.fitSvgForView = function (svgMarkup) {
+    var m = /<svg\b[^>]*>/i.exec(svgMarkup || '');
+    var tag = m ? m[0] : '';
+    var w = /\swidth\s*=\s*["']([\d.]+)(?:px)?["']/i.exec(tag);
+    var h = /\sheight\s*=\s*["']([\d.]+)(?:px)?["']/i.exec(tag);
+    var out = fitViewBoxToContent(normalizeSvgForPreview(svgMarkup));
+    if (w && h) out = out.replace(/<svg\b/i, '<svg width="' + w[1] + '" height="' + h[1] + '"');
+    return out;
+  };
+
   function svgToDataUri(svgMarkup) {
+    svgMarkup = fitViewBoxToContent(normalizeSvgForPreview(svgMarkup));
     return 'data:image/svg+xml;base64,' + window.btoa(unescape(encodeURIComponent(svgMarkup || '')));
   }
 
@@ -837,7 +924,7 @@
       if (!icon.svgContent && isHostedMode()) lazyHosted.push(index);
       var isSelected = !!(SF.libState.selected && SF.libState.selected[icon.id]);
       var isRepo = icon.source === 'repo';
-      var title = icon.name + (isRepo ? ' — ' + icon.sprite + '.svg (repository, read-only)' : '');
+      var title = icon.name + (isRepo ? ' — ' + icon.sprite + '.svg (repository)' : '');
 
       var cardHtml = '<div class="lib-card lib-select-card' + (isSelected ? ' lib-selected' : '') + (isRepo ? ' lib-card-repo' : '') + '" data-icon-id="' + SF.escapeAttr(icon.id) + '" title="' + SF.escapeAttr(title) + '">' +
         '<label class="library-select-toggle" title="Select icon">' +
@@ -854,6 +941,9 @@
           '<button class="btn btn-ghost btn-sm library-open-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-open-path="' + SF.escapeAttr(icon.openPath || '') + '" data-tooltip="View" aria-label="View">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>' +
           '</button>' +
+          (isRepo && icon.symbolId ? '<button class="btn btn-ghost btn-sm library-replace-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-symbol-id="' + SF.escapeAttr(icon.symbolId) + '" data-icon-name="' + SF.escapeAttr(icon.name) + '" data-tooltip="Replace with a new SVG (same place in the sprite) and commit" aria-label="Replace icon">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>' +
+          '</button>' : '') +
           '<button class="btn btn-ghost btn-sm library-delete-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-icon-name="' + SF.escapeAttr(icon.name) + '" style="color:var(--danger);" data-tooltip="' + (icon.canDelete === false ? 'Managed in repository' : 'Delete') + '" aria-label="Delete"' + (icon.canDelete === false ? ' disabled' : '') + '>' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
           '</button>' +

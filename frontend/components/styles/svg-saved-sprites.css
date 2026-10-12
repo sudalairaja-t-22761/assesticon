@@ -383,3 +383,27 @@ select.form-input {
   color: var(--danger);
 }
 .ml-restricted-hint svg { flex: 0 0 auto; margin-top: 2px; }
+
+/* Library tiles: tooltip is a body-level element (see icon-library.js) so card/grid overflow can't clip it. */
+.lib-icon-actions .btn[data-tooltip]::after {
+  display: none;
+}
+
+.lib-floating-tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 260px;
+  background: rgba(20, 22, 28, 0.95);
+  color: #fff;
+  padding: 4px 7px;
+  border-radius: 6px;
+  font-size: 10px;
+  line-height: 1.3;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.lib-floating-tooltip.visible {
+  opacity: 1;
+}

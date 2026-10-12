@@ -782,10 +782,9 @@
 }
 
 .lib-grid.lib-grid-icononly .lib-card-preview img {
-  width: auto;
-  height: auto;
-  max-width: 52px;
-  max-height: 52px;
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
   display: block;
 }
 

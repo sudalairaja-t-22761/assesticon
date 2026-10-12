@@ -398,8 +398,8 @@
       win.document.open();
       win.document.write(
         '<!doctype html><html><head><meta charset="utf-8"><title>SVG Preview</title>' +
-        '<style>html,body{margin:0;padding:0;background:#fff}svg{display:block;max-width:100vw;max-height:100vh}</style>' +
-        '</head><body>' + String(svgContent) + '</body></html>'
+        '<style>html,body{margin:0;padding:0;background:#fff}body{padding:16px}svg{display:block}</style>' +
+        '</head><body>' + (typeof SF.fitSvgForView === 'function' ? SF.fitSvgForView(String(svgContent)) : String(svgContent)) + '</body></html>'
       );
       win.document.close();
       return true;

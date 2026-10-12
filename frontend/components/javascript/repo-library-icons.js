@@ -387,6 +387,194 @@
     });
   }
 
+
+  // ── replace one icon in the repo sprite (same place, same symbol id) ────
+
+  /** Start/end of the element `<tag ... id="id" ...>...</tag>` (nested tags of the same name handled). */
+  function _findElement(text, tag, id) {
+    var open = new RegExp('<' + tag + '\\b[^>]*\\bid\\s*=\\s*["\']' + _escRe(id) + '["\'][^>]*>', 'g');
+    var m = open.exec(text);
+    if (!m) return null;
+    var start = m.index, pos = start + m[0].length, depth = 1;
+    if (/\/>$/.test(m[0])) return { start: start, end: pos, openEnd: pos, closeStart: pos };
+    var tok = new RegExp('<' + tag + '\\b[^>]*?(\\/?)>|<\\/' + tag + '\\s*>', 'g');
+    tok.lastIndex = pos;
+    var t;
+    while ((t = tok.exec(text)) !== null) {
+      if (t[0].charAt(1) === '/') { depth--; if (!depth) return { start: start, end: tok.lastIndex, openEnd: start + m[0].length, closeStart: t.index }; }
+      else if (t[1] !== '/') depth++;
+    }
+    return null;
+  }
+
+  /**
+   * Replace the artwork of ONE icon in the sprite TEXT. The symbol keeps its id and its slot
+   * (viewBox x/y/width/height) so nothing else in the sprite moves; the new artwork is centred
+   * in that slot (scaled down only when it is bigger than the slot).
+   * @param {string} spriteText
+   * @param {string} symbolId   e.g. "zcicn-search"
+   * @param {{name:string,text:string}} item  the new single-icon SVG
+   * @returns {{svg:string}|{error:string}}
+   */
+  SF.replaceIconInSpriteText = function (spriteText, symbolId, item) {
+    var sym = _findElement(spriteText, 'symbol', symbolId);
+    if (!sym) return { error: symbolId + ' was not found in the sprite (it may have been changed in the repository — press Sync from repo)' };
+    var symOpen = spriteText.slice(sym.start, sym.openEnd);
+    var vb = /viewBox\s*=\s*["']([^"']+)["']/.exec(symOpen);
+    var n = vb ? vb[1].trim().split(/[\s,]+/).map(Number) : [];
+    if (n.length !== 4 || !n.every(isFinite)) return { error: symbolId + ' has no readable viewBox' };
+    var slot = { x: n[0], y: n[1], w: n[2], h: n[3] };
+
+    var icon = SF.parseSVGFile(item.text, item.name);
+    if (!icon) return { error: 'The new file is not a readable SVG' };
+    _isolate(icon, 'r' + Date.now().toString(36) + '-');
+
+    var iw = icon.width || slot.w, ih = icon.height || slot.h;
+    var sc = Math.min(1, slot.w / iw, slot.h / ih);
+    var tx = slot.x + (slot.w - iw * sc) / 2 - icon.originX * sc;
+    var ty = slot.y + (slot.h - ih * sc) / 2 - icon.originY * sc;
+    var f = function (v) { return +v.toFixed(3); };
+    var hasStroke = /<[^>]+\bstroke\s*=/i.test(icon.svgContent || '');
+
+    var inner = spriteText.slice(sym.openEnd, sym.closeStart);
+    var useM = /<use\b[^>]*?(?:xlink:)?href\s*=\s*["']#([^"']+)["']/.exec(inner);
+    var gId = useM ? useM[1] : null;
+    var g = gId ? _findElement(spriteText, 'g', gId) : null;
+    if (!gId) gId = _camel(icon.name) + 'ZCI';
+
+    var newName = item.newName && String(item.newName).trim();
+    var newSymbolId = newName ? SF.makeSymbolId(newName) : symbolId;
+    if (newName && newSymbolId !== symbolId) {
+      if (_findElement(spriteText, 'symbol', newSymbolId)) return { error: newSymbolId + ' already exists in the sprite' };
+      gId = _camel(newName) + 'ZCI';
+    }
+
+    var a = 'id="' + SF.escapeAttr(gId) + '" transform="translate(' + f(tx) + ',' + f(ty) + ')' + (sc !== 1 ? ' scale(' + f(sc) + ')' : '') + '"';
+    if (icon.rootFill) a += ' fill="' + SF.escapeAttr(icon.rootFill) + '"';
+    if (icon.rootStroke && !hasStroke) a += ' stroke="' + SF.escapeAttr(icon.rootStroke) + '"';
+    if (icon.colorMode === 'stroke' && !icon.rootFill) a += ' fill="none"';
+    var newG = '<g ' + a + '>\n' + icon.svgContent + '\n</g>';
+
+    var out;
+    if (g) {
+      out = spriteText.slice(0, g.start) + newG + spriteText.slice(g.end);
+    } else {
+      // symbol that holds its artwork directly: swap the symbol's content instead
+      out = spriteText.slice(0, sym.openEnd) + '\n' + newG + '\n' + spriteText.slice(sym.closeStart);
+    }
+
+    if (newSymbolId !== symbolId) {
+      var sym2 = _findElement(out, 'symbol', symbolId);
+      if (sym2) {
+        var open2 = out.slice(sym2.start, sym2.openEnd).replace(/(\bid\s*=\s*)(["'])[^"']*\2/, '$1$2' + SF.escapeAttr(newSymbolId) + '$2');
+        var inner2 = out.slice(sym2.openEnd, sym2.closeStart).replace(/((?:xlink:)?href\s*=\s*)(["'])#[^"']*\2/, '$1$2#' + SF.escapeAttr(gId) + '$2');
+        out = out.slice(0, sym2.start) + open2 + inner2 + out.slice(sym2.closeStart);
+      }
+      out = out.replace(new RegExp('\\.' + _escRe(symbolId) + '(?![\\w-])', 'g'), '.' + newSymbolId);
+    }
+
+    if (icon.styleContent && icon.styleContent.trim()) {
+      var se = out.indexOf('</style>');
+      out = se >= 0 ? out.slice(0, se) + '\n' + icon.styleContent.trim() + '\n' + out.slice(se)
+        : out.replace(/(<svg\b[^>]*>)/, function (m) { return m + '\n<style type="text/css">\n' + icon.styleContent.trim() + '\n</style>'; });
+    }
+    if (icon.defsContent && icon.defsContent.trim()) {
+      var de = out.indexOf('</defs>');
+      if (de >= 0) out = out.slice(0, de) + '\n' + icon.defsContent.trim() + '\n' + out.slice(de);
+      else { var se2 = out.indexOf('</style>'); var at = se2 >= 0 ? se2 + 8 : out.search(/<svg\b[^>]*>/); out = out.slice(0, at) + '\n<defs>\n' + icon.defsContent.trim() + '\n</defs>' + out.slice(at); }
+    }
+    return { svg: out, symbolId: newSymbolId };
+  };
+
+  /** @returns {Promise<{ok:boolean, error?:string}>} */
+  SF.replaceIconInRepo = function (symbolId, iconName, item) {
+    var job = _queue.then(function () { return _replaceNow(symbolId, iconName, item); });
+    _queue = job.catch(function () {});
+    return job;
+  };
+
+  function _replaceNow(symbolId, iconName, item) {
+    var file = _spriteFiles()[0];
+    var result = { ok: false };
+    if (!file) { result.error = 'No icon repository sprite configured'; SF.showToast(result.error); return Promise.resolve(result); }
+    SF.showToast('Reading ' + file.name + ' from ' + (_cfg().repoName || 'repository') + '…');
+    return _getListing(true).then(function () { return _fetchText(file.name); }).then(function (res) {
+      var r = SF.replaceIconInSpriteText(res.text, symbolId, item);
+      if (r.error) { result.error = r.error; SF.showToast('Replace failed: ' + r.error); return result; }
+      return _commit(r.svg, [item.newName || iconName]).then(function (out) {
+        result.ok = true;
+        SF.showToast('Replaced ' + iconName + (item.newName && item.newName !== iconName ? ' (now ' + item.newName + ')' : '') + (out && out.pushed ? ' and pushed ' + String(out.commit || '').slice(0, 8) + ' to ' + out.branch : ' (repository already up to date)'));
+        return SF.loadRepoLibraryIcons(true, true).then(function () { return result; });
+      });
+    }).catch(function (err) {
+      result.error = (err && err.message) || 'unknown error';
+      if (err && err.status === 401 && typeof SF.handleHostedUnauthorized === 'function') return SF.handleHostedUnauthorized('Session expired. Sign in with Zoho and try again.');
+      SF.showToast('Replace failed: ' + result.error);
+      return result;
+    });
+  }
+
+  /** Same artwork (ignoring ids, classes and whitespace) as another repository icon? Returns that icon. */
+  function _artKey(markup) {
+    return String(markup || '')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\s(id|class)\s*=\s*["'][^"']*["']/gi, '')
+      .replace(/\s+/g, '')
+      .toLowerCase();
+  }
+
+  function _findDuplicateArtwork(text, fileName, ownSymbolId) {
+    var parsed = SF.parseSVGFile(text, fileName);
+    var key = parsed && _artKey(parsed.svgContent);
+    if (!key) return null;
+    var icons = (SF.libState && SF.libState.icons) || [];
+    for (var i = 0; i < icons.length; i++) {
+      var ic = icons[i];
+      if (!ic || ic.source !== 'repo' || ic.symbolId === ownSymbolId) continue;
+      var other = /<svg\b[^>]*>([\s\S]*)<\/svg>/i.exec(ic.svgContent || '');
+      if (other && _artKey(other[1].replace(/<(defs|style)\b[\s\S]*?<\/\1>/gi, '')) === key) return ic;
+    }
+    return null;
+  }
+
+  // Library tile "Replace" button → pick the new SVG → replace in the sprite → commit.
+  var _replaceTarget = null;
+  $(document).on('click', '.library-replace-btn', function (e) {
+    e.stopPropagation();
+    var $b = $(this);
+    if ($b.is(':disabled') || $b.hasClass('is-busy')) return;
+    _replaceTarget = { symbolId: $b.data('symbolId'), name: $b.data('iconName'), $btn: $b };
+    var $in = $('#libReplaceInput');
+    if (!$in.length) $in = $('<input type="file" id="libReplaceInput" accept=".svg,image/svg+xml" hidden>').appendTo('body');
+    $in.val('')[0].click();
+  });
+  $(document).on('click', '#libReplaceInput', function (e) { e.stopPropagation(); });
+  $(document).on('change', '#libReplaceInput', function () {
+    var t = _replaceTarget, f = this.files && this.files[0];
+    _replaceTarget = null;
+    if (!t || !f) return;
+    if (!/\.svg$/i.test(f.name)) { SF.showToast('Choose an .svg file'); return; }
+    _readFiles([f]).then(function (items) {
+      if (!items.length) { SF.showToast('Could not read that file'); return; }
+      var dup = _findDuplicateArtwork(items[0].text, f.name, t.symbolId);
+      if (dup) { SF.showToast('Replace blocked: this artwork is already in the Library as "' + dup.name + '"'); return; }
+      var entered = window.prompt('Icon name for the replacement (the symbol id is renamed to match):', t.name);
+      if (entered === null) return;
+      var newName = String(entered).trim().replace(/\s+/g, '-');
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(newName)) { SF.showToast('Use letters, numbers, - or _ for the icon name'); return; }
+      if (newName !== t.name) {
+        var clash = ((SF.libState && SF.libState.icons) || []).some(function (ic) {
+          return ic && ic.source === 'repo' && ic.symbolId !== t.symbolId &&
+            (String(ic.name).toLowerCase() === newName.toLowerCase() || String(ic.symbolId).toLowerCase() === SF.makeSymbolId(newName).toLowerCase());
+        });
+        if (clash) { SF.showToast('"' + newName + '" already exists in the Library — choose another name'); return; }
+      }
+      if (!window.confirm('Replace "' + t.name + '" with ' + f.name + (newName !== t.name ? ' as "' + newName + '"' : '') + ' and commit to the repository?')) return;
+      t.$btn.addClass('is-busy');
+      SF.replaceIconInRepo(t.symbolId, t.name, { name: newName, newName: newName, text: items[0].text }).then(function () { t.$btn.removeClass('is-busy'); });
+    });
+  });
+
   /** Add single-icon SVGs ({name, text}) to the repo sprite; see _appendNow for the result. */
   SF.addItemsToIconRepo = function (items, quiet) { return _appendItems(items, quiet); };
 
