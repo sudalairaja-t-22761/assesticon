@@ -4,9 +4,12 @@
  * Record store for the verification workflow (members, roles, icon_status, icon_requests, request_events,
  * admin_tokens).
  *
- * - On Catalyst: ONE Data Store table, `workflow_store`, with two columns:
+ * - On Catalyst: ONE Data Store table, `workflow_store`, with two required columns:
  *       coll   Var Char   which collection the row belongs to (members, roles, ...)
  *       data   Text       the record as JSON (Text holds up to 10,000 characters)
+ *   plus OPTIONAL readable columns that mirror a few fields of member rows, so the table is easy to read in the
+ *   console: email, role, approverType, expiresAt (all Var Char). They are never read back, and if they do not
+ *   exist the writes quietly go without them.
  *   Tables cannot be created from code, so keeping everything in one generic table means the console needs a
  *   single table with two columns, and new fields never need a schema change.
  *   `user_data` (the existing login table) is read as a normal table.
@@ -23,6 +26,12 @@ const catalyst = require("zcatalyst-sdk-node");
 const STORE_TABLE = process.env.WORKFLOW_TABLE || "workflow_store";
 const REAL_TABLES = new Set(["user_data"]);       // existing tables with their own columns
 const MAX_DATA = 10000;                            // Catalyst "Text" column limit
+// Readable copies of key fields, written next to the JSON (members only).
+const MIRRORS = {
+    members: (r) => ({ email: r.userEmail || "", role: r.memberType || "", approverType: r.approverType || "", expiresAt: r.expiresAt || "" })
+};
+const mirrorOf = (table, record) => (MIRRORS[table] ? MIRRORS[table](record) : {});
+
 const LOCAL_FILE = path.join(os.tmpdir(), "svgforge-workflow.json");
 
 function isCatalystRuntime(req) {
@@ -86,7 +95,8 @@ function forRequest(req) {
                 const db = localRead();
                 db[table] = (db[table] || []).filter((r) => String(r.ROWID) !== String(id));
                 localWrite(db);
-            }
+            },
+            async syncMirrors() { return 0; }
         };
     }
 
@@ -100,7 +110,11 @@ function forRequest(req) {
         },
         async insert(table, row) {
             if (REAL_TABLES.has(table)) return flatten(await ds.table(table).insertRow(row), table);
-            const saved = flatten(await guard(() => store().insertRow({ coll: table, data: encode(row) })), STORE_TABLE);
+            const base = { coll: table, data: encode(row) }, extra = mirrorOf(table, row);
+            const write = async (fields) => flatten(await guard(() => store().insertRow(fields)), STORE_TABLE);
+            let saved;
+            try { saved = await write({ ...base, ...extra }); }
+            catch (e) { if (!Object.keys(extra).length) throw e; saved = await write(base); } // mirror columns not created yet
             return { ...row, ROWID: saved.ROWID, CREATEDTIME: saved.CREATEDTIME };
         },
         async update(table, id, fields) {
@@ -108,11 +122,25 @@ function forRequest(req) {
             const current = flatten(await guard(() => store().getRow(id)), STORE_TABLE);
             if (!current || current.coll !== table) return null;
             const merged = { ...decode(current), ...fields };
-            await store().updateRow({ ROWID: id, data: encode(merged) });
+            const base = { ROWID: id, data: encode(merged) }, extra = mirrorOf(table, merged);
+            try { await store().updateRow({ ...base, ...extra }); }
+            catch (e) { if (!Object.keys(extra).length) throw e; await store().updateRow(base); } // mirror columns not created yet
             return merged;
         },
         async remove(table, id) {
             await (REAL_TABLES.has(table) ? ds.table(table) : store()).deleteRow(id);
+        },
+        // Fill the readable columns of rows saved before they existed. Cheap no-op once everything is in sync.
+        async syncMirrors(table) {
+            if (!MIRRORS[table]) return 0;
+            const rows = ((await guard(() => store().getAllRows())) || []).map((r) => flatten(r, STORE_TABLE)).filter((r) => r.coll === table);
+            let n = 0;
+            for (const row of rows) {
+                const want = mirrorOf(table, decode(row));
+                if (Object.keys(want).every((k) => String(row[k] == null ? "" : row[k]) === String(want[k]))) continue;
+                try { await store().updateRow({ ROWID: row.ROWID, ...want }); n++; } catch (_) { return n; } // columns not created: stop
+            }
+            return n;
         }
     };
 }

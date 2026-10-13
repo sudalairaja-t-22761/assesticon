@@ -15,7 +15,7 @@
  *                                         approverType: "none" (default) | "designer" | "ui"  — who may be assigned to review
  *   DELETE /api/members/:id                                                                     [admin]
  *   GET    /api/icon-status             → [{ symbolId, sprite, status }]
- *   POST   /api/requests                → { symbolId, iconName, svg, targetSprite, note }; the Designer approvers are mailed first
+ *   POST   /api/requests                → { symbolId, iconName, svg, targetSprite, note }; the Visual audit approvers are mailed first
  *   GET    /api/requests                → admins see all; others see requested-by-me + assigned-to-me
  *   GET    /api/requests/:id            → request + event timeline
  *   POST   /api/requests/:id/assign     → { designer?, ui? } optional: narrow a review to one approver (who is mailed) [admin]
@@ -97,7 +97,7 @@ function createWorkflowRouter({ requireSession }) {
         }
         if (sent.length || failed.length) {
             await logEvent(db, request.ROWID, req, failed.length && !sent.length ? "mail_failed" : "mail_sent",
-                `${type === "ui" ? "UI" : "Designer"} approvers notified (${sent.length}${sent.some((x) => x.dev) ? ", logged in local run" : ""}): ${sent.map((x) => x.to).join(", ")}` +
+                `${type === "ui" ? "UI audit" : "Visual audit"} approvers notified (${sent.length}${sent.some((x) => x.dev) ? ", logged in local run" : ""}): ${sent.map((x) => x.to).join(", ")}` +
                 (failed.length ? `; failed: ${failed.map((x) => x.to + " (" + x.error + ")").join(", ")}` : ""));
         }
         return { pool, sent, failed };
@@ -233,7 +233,9 @@ function createWorkflowRouter({ requireSession }) {
     }));
 
     router.get("/members", requireRole(["admin"]), wrap(async (req, res) => {
-        res.json({ success: true, members: await store.forRequest(req).all("members") });
+        const db = store.forRequest(req);
+        try { await db.syncMirrors("members"); } catch (_) { /* readable columns are optional */ }
+        res.json({ success: true, members: await db.all("members") });
     }));
 
     router.post("/members", requireRole(["admin"]), wrap(async (req, res) => {
@@ -358,15 +360,15 @@ function createWorkflowRouter({ requireSession }) {
         await setIconStatus(db, symbolId, sprite, "requested", req);
         await logEvent(db, saved.ROWID, req, "requested", b.note);
 
-        // Step 1: submitting mails the Designer approvers only (a mail problem never blocks the request).
-        // The UI approvers are mailed after a Designer approves (see /review).
+        // Step 1: submitting mails the Visual audit approvers only (a mail problem never blocks the request).
+        // The UI audit approvers are mailed after a Visual audit approver approves (see /review).
         const members = await db.all("members");
         const d = await mailApprovers(req, db, saved, "designer", members);
         // The pool is every eligible approver, whether or not the mail got through (mailStatus says how it went).
         const request = await db.update("icon_requests", saved.ROWID, {
             notifiedDesigners: d.pool.map((x) => x.userEmail).join(","), mailStatus: mailState([d])
         });
-        // Nobody to mail because the only Designer approver is the requester themselves?
+        // Nobody to mail because the only Visual audit approver is the requester themselves?
         const selfOnly = !d.pool.length && members.some((m) => !isExpired(m) && approverOf(m) === "designer" && norm(m.userEmail) === norm(me(req).email));
         res.json({ success: true, request: request || saved,
             notified: { designer: d.sent.length, ui: 0, failed: d.failed.length, local: d.sent.some((x) => x.dev), error: (d.failed[0] || {}).error || "", selfOnly } });
@@ -407,9 +409,9 @@ function createWorkflowRouter({ requireSession }) {
         const isType = (email, type) => members.some((m) => norm(m.userEmail) === norm(email) && approverOf(m) === type && !isExpired(m));
         const designer = str(req.body.designer, 200).trim();
         const ui = str(req.body.ui, 200).trim();
-        if (!designer && !ui) return res.status(400).json({ success: false, message: "Pick a designer and/or a UI approver" });
-        if (designer && !isType(designer, "designer")) return res.status(400).json({ success: false, message: "designer must be an active Designer approver" });
-        if (ui && !isType(ui, "ui")) return res.status(400).json({ success: false, message: "ui must be an active UI approver" });
+        if (!designer && !ui) return res.status(400).json({ success: false, message: "Pick a Visual audit and/or a UI audit approver" });
+        if (designer && !isType(designer, "designer")) return res.status(400).json({ success: false, message: "The Visual audit approver must be an active Visual audit approver" });
+        if (ui && !isType(ui, "ui")) return res.status(400).json({ success: false, message: "The UI audit approver must be an active UI audit approver" });
         const fields = {};
         if (designer) Object.assign(fields, { assignedDesigner: designer, designerDecision: "", designerBy: "" });
         if (ui) Object.assign(fields, { assignedUI: ui, uiDecision: "", uiBy: "" });
@@ -444,7 +446,7 @@ function createWorkflowRouter({ requireSession }) {
         const decided = slotDecision(r, slot);
         if (decided) {
             const by = slot === "designer" ? r.designerBy : r.uiBy;
-            return res.status(409).json({ success: false, message: `The ${slot === "ui" ? "UI" : "Designer"} review is already ${decided}${by ? " by " + by : ""}` });
+            return res.status(409).json({ success: false, message: `The ${slot === "ui" ? "UI" : "Visual"} audit is already ${decided}${by ? " by " + by : ""}` });
         }
         const asDesigner = slot === "designer", asUI = slot === "ui";
 
@@ -459,7 +461,7 @@ function createWorkflowRouter({ requireSession }) {
         const saved = await db.update("icon_requests", r.ROWID, fields);
         await logEvent(db, r.ROWID, req, `${asDesigner ? "designer" : "ui"}_${value}`, req.body.note);
 
-        // Step 2: the Designer approved, so now the UI approvers are mailed (or the one assigned to the UI review).
+        // Step 2: the Visual audit approved, so now the UI audit approvers are mailed (or the one assigned to the UI review).
         let uiMail = null;
         if (asDesigner && value === "approved" && fields.status !== "rejected") {
             const members = await db.all("members");

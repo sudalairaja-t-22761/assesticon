@@ -67,7 +67,7 @@ function requestLink(req, request) {
 
 /** "Waiting for your approval" mail for one reviewer. */
 function approvalMail(req, { role, request }) {
-    const roleName = role === "designer" ? "Designer" : "UI";
+    const roleName = role === "designer" ? "Visual audit" : "UI audit";
     const link = requestLink(req, request);
     const target = request.targetSprite === "svg_cssicons" ? "cssicon (svg_cssicons.svg)" : "utilicon (crmutil_icons.svg)";
     const by = request.requestedByName || request.requestedBy;
@@ -82,7 +82,7 @@ function approvalMail(req, { role, request }) {
         `<p style="margin:0 0 6px;font-size:15px;color:#111827">Hi,</p>` +
         `<p style="margin:0 0 18px;font-size:15px;color:#111827">The icon <b>${esc(request.iconName)}</b> is <b>waiting for your ${roleName} approval</b>.</p>` +
         `<table role="presentation" style="border-collapse:collapse;margin-bottom:22px">` +
-        row("Icon", esc(request.iconName)) + row("Requested by", esc(by)) + row("Move to", esc(target)) + row("Your review", `${roleName} approval`) +
+        row("Icon", esc(request.iconName)) + row("Requested by", esc(by)) + row("Move to", esc(target)) + row("Your audit", `${roleName}`) +
         (request.note ? row("Note", esc(request.note)) : "") +
         `</table>` +
         (link
@@ -90,7 +90,7 @@ function approvalMail(req, { role, request }) {
               `<p style="margin:16px 0 0;font-size:12px;color:#6b7280">Button not working? Open this link:<br><a href="${esc(link)}" style="color:#2C83EC;word-break:break-all">${esc(link)}</a></p>`
             : `<p style="margin:0;font-size:14px;color:#111827">Open <b>Icon Requests</b> in the Icon Assets tool to approve or reject.</p>`) +
         `</td></tr>` +
-        `<tr><td style="padding:14px 24px;background:#f9fafb;color:#9ca3af;font-size:12px">You received this because you are a ${roleName} approver. Any one ${roleName} approver can complete this review.</td></tr>` +
+        `<tr><td style="padding:14px 24px;background:#f9fafb;color:#9ca3af;font-size:12px">You received this because you are on the ${roleName} approvers list. Any one ${roleName} approver can complete this audit.</td></tr>` +
         `</table></div>`;
     const text =
         `Icon "${request.iconName}" is waiting for your ${roleName} approval.\n\n` +

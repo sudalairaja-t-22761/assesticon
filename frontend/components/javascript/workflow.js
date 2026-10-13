@@ -3,9 +3,9 @@
  *
  * - Verification badges on Library icons (unverified / requested / mock verified / master verified)
  * - Request Icon form (target sprite: utilicon = crmutil_icons, cssicon = svg_cssicons)
- * - Requests page: step progress, admin assigns Designer + UI reviewers, reviewers approve/reject,
+ * - Requests page: step progress, admin can assign Visual audit + UI audit approvers, reviewers approve/reject,
  *   admin pushes the approved icon into the chosen sprite of the main library
- * - Members page (admin only): add members with a type (Admin / Designer / UI)
+ * - Members page (admin only): add members with a role and an approver type (None / Visual audit / UI audit)
  */
 (function (SF, $) {
   'use strict';
@@ -22,9 +22,21 @@
   };
   var APPROVER_INFO = {
     none: 'Not an approver: will not be offered when requests are assigned.',
-    designer: 'Designer approver — reviews the visual quality of requested icons (shape, grid, style). Gets a mail when a request is waiting for them.',
-    ui: 'UI approver — reviews how the icon fits the product UI (size, usage, naming). Gets a mail when a request is waiting for them.'
+    designer: 'Visual audit — checks the visual quality of requested icons (shape, grid, style). Gets a mail when a request is waiting for their visual audit.',
+    ui: 'UI audit — checks how the icon fits the product UI (size, usage, naming). Gets a mail after the visual audit is approved.'
   };
+  // Stage labels shown to people (the stored keys stay designer | ui).
+  var AUDIT = { designer: 'Visual audit', ui: 'UI audit' };
+  var STAGE = { designer: 'Visual', ui: 'UI' };
+  // "Visual approved" / "UI rejected" ...
+  function decisionPill(decision, slot) {
+    return '<span class="vf-pill vf-pill-' + decision + '">' + STAGE[slot] + ' ' + decision + '</span>';
+  }
+  // Timeline action labels for stored actions like designer_approved.
+  function actionLabel(action) {
+    var m = /^(designer|ui)_(approved|rejected)$/.exec(action);
+    return m ? STAGE[m[1]] + ' ' + m[2] : action.replace(/_/g, ' ');
+  }
   // Approver type of a member: designer | ui | '' (none). Older rows without the field used their Designer/UI role.
   function approverOf(m) {
     var a = String(m.approverType || '');
@@ -215,7 +227,7 @@
         '</select></label>' +
         '<label>Note<textarea id="wfReqNote" rows="3" maxlength="1000" placeholder="Where will it be used?"></textarea></label>' +
         '<div><button class="btn btn-primary btn-sm" id="wfReqSubmit" type="button">Request verification</button></div>' +
-        '<div class="vf-msg">Designer and UI teams both review. Once both approve, an admin pushes it to the main library.</div>' +
+        '<div class="vf-msg">Visual audit and UI audit both have to approve. Once both approve, an admin pushes it to the main library.</div>' +
       '</div>');
     updateRequestPreview();
     if (!icons.length && typeof SF.loadRepoLibraryIcons === 'function') {
@@ -248,10 +260,10 @@
     }).then(function (res) {
       var n = res.notified || {};
       SF.showToast(n.designer
-        ? 'Request submitted — mailed ' + n.designer + ' Designer approver' + (n.designer === 1 ? '' : 's') + '. UI approvers are mailed after a Designer approves.' + (n.local ? ' (NOT delivered — no Catalyst credentials; see the server log)' : '') + (n.failed ? ' · ' + n.failed + ' mail(s) failed' + (n.error ? ': ' + n.error : '') : '')
-        : n.selfOnly ? 'Request submitted — nobody was mailed: you are the only Designer approver and cannot approve your own request. Add another Designer approver (or an admin can enable ALLOW_SELF_APPROVAL).'
+        ? 'Request submitted — mailed ' + n.designer + ' Visual audit approver' + (n.designer === 1 ? '' : 's') + '. UI audit approvers are mailed after the visual audit is approved.' + (n.local ? ' (NOT delivered — no Catalyst credentials; see the server log)' : '') + (n.failed ? ' · ' + n.failed + ' mail(s) failed' + (n.error ? ': ' + n.error : '') : '')
+        : n.selfOnly ? 'Request submitted — nobody was mailed: you are the only Visual audit approver and cannot approve your own request. Add another Visual audit approver (or an admin can enable ALLOW_SELF_APPROVAL).'
         : n.failed ? 'Request submitted — mail failed: ' + (n.error || 'see the request timeline')
-        : 'Request submitted — no Designer approvers yet, ask an admin to add them');
+        : 'Request submitted — no Visual audit approvers yet, ask an admin to add them');
       return loadStatuses();
     }).then(function () { SF.switchPage('wfrequests'); })
       .catch(fail).then(function () { $btn.prop('disabled', false); });
@@ -292,13 +304,14 @@
 
   // One review slot (Designer or UI): who may act, and the state. Every approver of the type was mailed on submit,
   // unless an admin assigned the slot to one person.
-  function reviewerCell(assigned, decision, by, notifiedCsv, status, label, notYet) {
-    if (notYet && !decision && status === 'pending') return '<span class="vf-msg">starts after the Designer approves</span>';
+  function reviewerCell(assigned, decision, by, notifiedCsv, status, slot, notYet) {
+    var label = AUDIT[slot];
+    if (notYet && !decision && status === 'pending') return '<span class="vf-msg">starts after the Visual audit is approved</span>';
     var pool = String(notifiedCsv || '').split(',').filter(Boolean);
     var who = assigned ? esc(assigned)
       : pool.length ? '<span title="' + esc(pool.join(', ')) + '">' + pool.length + ' ' + label + ' approver' + (pool.length === 1 ? '' : 's') + '</span>'
       : '<span class="vf-msg">no ' + label + ' approvers</span>';
-    var state = decision ? pill(decision) + (by ? ' <span class="vf-msg">by ' + esc(by) + '</span>' : '')
+    var state = decision ? decisionPill(decision, slot) + (by ? ' <span class="vf-msg">by ' + esc(by) + '</span>' : '')
       : (status === 'pending' && (assigned || pool.length) ? '<span class="vf-pill vf-pill-pending">waiting for approval</span>' : '');
     return who + '<div>' + state + '</div>';
   }
@@ -347,7 +360,7 @@
       var name = m ? (m.userName || m.userEmail) : a.email;
       return '<tr><td><div class="vf-person">' + avatarHtml(m && m.userAvatar, name) + '<div><b>' + esc(name) + '</b>' +
         (a.email.toLowerCase() === me ? ' <span class="vf-you">You</span>' : '') + '<div class="vf-msg">' + esc(a.email) + '</div></div></div></td>' +
-        '<td>' + Object.keys(a.types).map(function (t) { return '<span class="vf-pill-tag vf-approver-' + t + '">' + (t === 'ui' ? 'UI' : 'Designer') + '</span>'; }).join(' ') + '</td>' +
+        '<td>' + Object.keys(a.types).map(function (t) { return '<span class="vf-pill-tag vf-approver-' + t + '">' + AUDIT[t] + '</span>'; }).join(' ') + '</td>' +
         '<td><span class="vf-pill vf-pill-pending">' + a.requests.length + ' waiting</span></td>' +
         '<td>' + a.requests.map(function (q) { return '<button type="button" class="vf-chip" data-vf-open-req="' + esc(q.id) + '">' + esc(q.name) + '</button>'; }).join('') + '</td></tr>';
     }).join('') + '</tbody></table>');
@@ -356,13 +369,13 @@
 
   function renderRequestsList() {
     if (!wf.requests.length) { $('#wfRequestsList').html('<div class="vf-empty">No requests yet.</div>'); return; }
-    $('#wfRequestsList').html('<table class="vf-table"><thead><tr><th>Icon</th><th>Target</th><th>Requested by</th><th>Designer</th><th>UI</th><th>Status</th><th></th></tr></thead><tbody>' +
+    $('#wfRequestsList').html('<table class="vf-table"><thead><tr><th>Icon</th><th>Target</th><th>Requested by</th><th>Visual audit</th><th>UI audit</th><th>Status</th><th></th></tr></thead><tbody>' +
       wf.requests.map(function (r) {
         return '<tr class="vf-row" data-vf-req="' + esc(r.ROWID) + '">' +
           '<td>' + esc(r.iconName) + '</td><td>' + esc(r.targetSprite === 'svg_cssicons' ? 'cssicon' : 'utilicon') + '</td>' +
           '<td>' + esc(r.requestedByName || r.requestedBy) + '</td>' +
-          '<td>' + reviewerCell(r.assignedDesigner, r.designerDecision, r.designerBy, r.notifiedDesigners, r.status, 'Designer') + '</td>' +
-          '<td>' + reviewerCell(r.assignedUI, r.uiDecision, r.uiBy, r.notifiedUI, r.status, 'UI', r.designerDecision !== 'approved') + '</td>' +
+          '<td>' + reviewerCell(r.assignedDesigner, r.designerDecision, r.designerBy, r.notifiedDesigners, r.status, 'designer') + '</td>' +
+          '<td>' + reviewerCell(r.assignedUI, r.uiDecision, r.uiBy, r.notifiedUI, r.status, 'ui', r.designerDecision !== 'approved') + '</td>' +
           '<td>' + pill(r.status) + mailTag(r) + '</td>' +
           '<td class="vf-row-actions">' + (canDelete(r) ? '<button class="btn btn-ghost btn-sm vf-pill" data-vf-req-del="' + esc(r.ROWID) + '" style="color:var(--danger)">Delete</button>' : '') + '</td></tr>';
       }).join('') + '</tbody></table>');
@@ -374,8 +387,8 @@
     var rej = function (d) { return d === 'rejected'; };
     var steps = [
       { label: 'Requested', cls: 'done' },
-      { label: 'Designer review', cls: r.designerDecision === 'approved' ? 'done' : rej(r.designerDecision) ? 'rejected' : 'current' },
-      { label: 'UI review', cls: r.uiDecision === 'approved' ? 'done' : rej(r.uiDecision) ? 'rejected' : (r.designerDecision === 'approved' ? 'current' : '') },
+      { label: 'Visual audit', cls: r.designerDecision === 'approved' ? 'done' : rej(r.designerDecision) ? 'rejected' : 'current' },
+      { label: 'UI audit', cls: r.uiDecision === 'approved' ? 'done' : rej(r.uiDecision) ? 'rejected' : (r.designerDecision === 'approved' ? 'current' : '') },
       { label: 'Mock verified', cls: (r.status === 'approved' || r.status === 'pushed') ? 'done' : '' },
       { label: 'Pushed to library', cls: r.status === 'pushed' ? 'done' : (r.status === 'approved' ? 'current' : '') }
     ];
@@ -388,9 +401,9 @@
       var r = res.request;
       var actions = '';
       if (wf.role === 'admin' && r.status === 'pending') {
-        actions += '<span class="vf-msg">The Designer approvers were mailed; the UI approvers are mailed after a Designer approves. Optionally assign one person instead:</span>' +
-          '<select id="wfAssignDesigner"><option value="">Any Designer approver</option></select>' +
-          '<select id="wfAssignUI"><option value="">Any UI approver</option></select>' +
+        actions += '<span class="vf-msg">The Visual audit approvers were mailed; the UI audit approvers are mailed after the visual audit is approved. Optionally assign one person instead:</span>' +
+          '<select id="wfAssignDesigner"><option value="">Any Visual audit approver</option></select>' +
+          '<select id="wfAssignUI"><option value="">Any UI audit approver</option></select>' +
           '<button class="btn btn-primary btn-sm" id="wfAssignBtn" type="button">Assign</button>';
       }
       if (res.canReview) { // this person is in the approver pool for a slot that is still open
@@ -414,7 +427,7 @@
         stepsHtml(r) +
         (actions ? '<div class="vf-actions" data-vf-id="' + esc(r.ROWID) + '">' + actions + '</div>' : '') +
         '<ul class="vf-timeline">' + (res.events || []).map(function (ev) {
-          return '<li><b>' + esc(ev.action.replace(/_/g, ' ')) + '</b> — ' + esc(ev.actor) + (ev.note ? ': ' + esc(ev.note) : '') + '</li>';
+          return '<li><b>' + esc(actionLabel(ev.action)) + '</b> — ' + esc(ev.actor) + (ev.note ? ': ' + esc(ev.note) : '') + '</li>';
         }).join('') + '</ul></div>');
       wf.open = r;
       if (wf.role === 'admin' && r.status === 'pending') fillAssignDropdowns(r);
@@ -469,7 +482,7 @@
 
   $(document).on('click', '#wfAssignBtn', function () {
     var d = $('#wfAssignDesigner').val(), u = $('#wfAssignUI').val();
-    if (!d && !u) { SF.showToast('Pick a Designer and/or UI approver to assign'); return; }
+    if (!d && !u) { SF.showToast('Pick a Visual audit and/or UI audit approver to assign'); return; }
     api('POST', 'requests/' + wf.open.ROWID + '/assign', { designer: d, ui: u })
       .then(function (res) {
         var mail = res.mail || [], bad = mail.filter(function (m) { return !m.ok; });
@@ -484,10 +497,10 @@
     api('POST', 'requests/' + wf.open.ROWID + '/review', { decision: $(this).data('vf-review'), note: $('#wfReviewNote').val() })
       .then(function (res) {
         var u = res.uiMail;
-        SF.showToast(u ? (u.failed ? 'Saved — UI approvers: ' + u.failed + ' mail(s) failed' + (u.error ? ': ' + u.error : '')
-          : u.local ? 'Saved — UI approvers listed (mail NOT delivered: no Catalyst credentials)'
-          : u.sent ? 'Saved — mailed ' + u.sent + ' UI approver' + (u.sent === 1 ? '' : 's') + ' for the next review'
-          : 'Saved — no UI approvers yet to mail') : 'Review saved');
+        SF.showToast(u ? (u.failed ? 'Saved — UI audit approvers: ' + u.failed + ' mail(s) failed' + (u.error ? ': ' + u.error : '')
+          : u.local ? 'Saved — UI audit approvers listed (mail NOT delivered: no Catalyst credentials)'
+          : u.sent ? 'Saved — mailed ' + u.sent + ' UI audit approver' + (u.sent === 1 ? '' : 's') + ' for the next audit'
+          : 'Saved — no UI audit approvers yet to mail') : 'Review saved');
         return Promise.all([loadRequests(), loadStatuses()]);
       }).catch(fail);
   });
@@ -601,7 +614,7 @@
       '<div class="vf-modal-grid">' +
         '<label class="vf-field"><span>Role <em>(menu access)</em></span><select id="wfMemberType" class="vf-input">' + roleOptions('designer') + '</select></label>' +
         '<label class="vf-field"><span>Approver</span><select id="wfMemberApprover" class="vf-input">' +
-          '<option value="none" selected>None</option><option value="designer">Designer approver</option><option value="ui">UI approver</option></select></label>' +
+          '<option value="none" selected>None</option><option value="designer">Visual audit</option><option value="ui">UI audit</option></select></label>' +
       '</div>' +
       '<div class="vf-role-hint" id="wfTypeHint"></div>' +
       '<div class="vf-role-hint" id="wfApproverHint">' + esc(APPROVER_INFO.none) + '</div>' +
@@ -613,7 +626,7 @@
       '</div></div>';
   }
 
-  var MEMBER_TABS = [['all', 'All members'], ['designer', 'Designer approvers'], ['ui', 'UI approvers']];
+  var MEMBER_TABS = [['all', 'All members'], ['designer', 'Visual audit'], ['ui', 'UI audit']];
 
   // Pending / approved counts per approver, from the requests list (admins receive every request).
   function approverStats(email) {
@@ -634,7 +647,7 @@
   }
   function approverPill(m) {
     var a = isExpiredMember(m) ? '' : approverOf(m);
-    return a ? '<span class="vf-pill-tag vf-approver-' + a + '">' + (a === 'ui' ? 'UI' : 'Designer') + ' approver</span>' : '<span class="vf-msg">None</span>';
+    return a ? '<span class="vf-pill-tag vf-approver-' + a + '">' + AUDIT[a] + '</span>' : '<span class="vf-msg">None</span>';
   }
 
   function renderMembers() {
@@ -661,7 +674,7 @@
           '<td class="vf-row-actions"><button class="btn btn-ghost btn-sm vf-pill" data-vf-member-edit="' + esc(m.ROWID) + '">Edit</button>' +
           '<button class="btn btn-ghost btn-sm vf-pill" data-vf-member-del="' + esc(m.ROWID) + '" style="color:var(--danger)">Remove</button></td></tr>';
       }).join('') + '</tbody></table>'
-      : '<div class="vf-empty">' + (q ? 'No members match your search.' : approvers ? 'No ' + (tab === 'ui' ? 'UI' : 'Designer') + ' approvers yet. Add or edit a member and set Approver.' : 'No members yet. Click Add Member to start.') + '</div>');
+      : '<div class="vf-empty">' + (q ? 'No members match your search.' : approvers ? 'No ' + AUDIT[tab] + ' approvers yet. Add or edit a member and set Approver.' : 'No members yet. Click Add Member to start.') + '</div>');
   }
 
   $(document).on('click', '[data-vf-tab]', function () { wf.memberTab = $(this).data('vf-tab'); renderMembers(); });
