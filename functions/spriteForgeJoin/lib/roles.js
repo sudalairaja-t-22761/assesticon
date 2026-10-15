@@ -28,6 +28,7 @@ const MENUS = [
     { key: "create_svg",     label: "Create SVG",      group: "Workflow" },
     { key: "customise",      label: "Customise Icons", group: "Documentation" },
     { key: "library",        label: "Icon Library",    group: "Library" },
+    { key: "asset_store",   label: "Asset Store",     group: "Library" },
     { key: "figma",          label: "Figma Import",    group: "Integrations" },
     { key: "webfont",        label: "SVG to WebFont",  group: "Tools" },
     { key: "settings",       label: "Settings",        group: "Tools" },

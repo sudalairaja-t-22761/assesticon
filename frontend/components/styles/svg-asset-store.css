@@ -1,0 +1,64 @@
+/* ============================================================
+   ASSET STORE PAGE — every image of the repository's Assets folder
+   ============================================================ */
+.as-count { font-size: 12px; font-weight: 500; color: var(--text-tertiary); margin-left: 8px; }
+.as-summary { font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; }
+.as-search, .as-filter {
+  height: 30px; padding: 0 10px; font-size: 12px; color: var(--text-primary);
+  background: var(--bg-input); border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+}
+.as-search { width: 200px; }
+.as-search:focus, .as-filter:focus { outline: none; border-color: var(--accent); }
+
+.as-group-title {
+  display: flex; align-items: center; gap: 8px; margin: 14px 0 4px; font-size: 13px; font-weight: 600; color: var(--text-primary);
+}
+.as-group-title:first-child { margin-top: 0; }
+.as-group-title span { font-size: 11px; font-weight: 500; color: var(--text-tertiary); }
+
+.as-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 8px 0 4px; }
+.as-card {
+  background: var(--bg-panel); border: 1px solid var(--border-light); border-radius: var(--radius);
+  padding: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; cursor: zoom-in;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.as-card:hover, .as-card:focus-visible { border-color: var(--accent); box-shadow: var(--shadow-sm); outline: none; }
+.as-thumb {
+  height: 110px; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: var(--radius-sm);
+  background-color: var(--bg-input);
+  background-image: linear-gradient(45deg, rgba(128,128,128,.12) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.12) 75%),
+                    linear-gradient(45deg, rgba(128,128,128,.12) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.12) 75%);
+  background-size: 14px 14px; background-position: 0 0, 7px 7px;
+}
+.as-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.as-thumb .as-meta { padding: 0 6px; text-align: center; }
+.as-name { font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.as-meta { font-size: 10px; color: var(--text-tertiary); text-transform: uppercase; }
+.as-empty { text-align: center; padding: 48px 16px; color: var(--text-tertiary); font-size: 13px; }
+.as-error { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--danger-bg); color: var(--danger); font-size: 13px; }
+
+/* preview */
+.as-preview { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.7); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.as-preview-box {
+  background: var(--bg-panel); border-radius: var(--radius); width: min(920px, 100%); max-height: 100%;
+  display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.35);
+}
+.as-preview-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border-light); }
+.as-preview-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.as-preview-stage {
+  position: relative; flex: 1; min-height: 260px; display: flex; align-items: center; justify-content: center; padding: 20px; overflow: auto;
+  background-color: var(--bg-input);
+  background-image: linear-gradient(45deg, rgba(128,128,128,.12) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.12) 75%),
+                    linear-gradient(45deg, rgba(128,128,128,.12) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.12) 75%);
+  background-size: 16px 16px; background-position: 0 0, 8px 8px;
+}
+.as-preview-stage img { max-width: 100%; max-height: 62vh; object-fit: contain; }
+.as-preview-nav {
+  position: absolute; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border-radius: 50%; border: 0; cursor: pointer;
+  background: var(--bg-panel); color: var(--text-primary); box-shadow: var(--shadow-sm); font-size: 18px; line-height: 1;
+}
+.as-preview-nav:hover { color: var(--accent); }
+.as-preview-prev { left: 10px; } .as-preview-next { right: 10px; }
+.as-preview-info { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; padding: 12px 16px; border-top: 1px solid var(--border-light); font-size: 12px; color: var(--text-secondary); }
+.as-preview-info b { color: var(--text-primary); font-weight: 600; }
+.as-preview-actions { margin-left: auto; display: flex; gap: 8px; }

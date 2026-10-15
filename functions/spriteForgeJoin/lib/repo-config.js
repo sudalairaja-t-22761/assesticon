@@ -63,6 +63,7 @@ const ICON_DEFAULTS = {
     branch:      "default",
     folder:      "Icon_library",
     versionFile: "",                // the Iconassest repo has no package.json
+    assetsDir:   "Assets",          // folder with the Asset Store images (any image format)
     files:       ["Sprite/crmutil_icons.svg"],
     pairs:       ["crmutil_icons.svg"],
     blobTemplate:   "{base}/{project}#/source/{branch}/{repo}/{path}",
@@ -83,6 +84,7 @@ function load(opts) {
     const tokenUser   = str(P + "TOKEN_USER", "oauth2");
     // File (relative to the repo root) whose "version" is shown at the top of the Library. "" disables it.
     const versionFile = str(P + "VERSION_FILE", D.versionFile !== undefined ? D.versionFile : DEFAULT_VERSION_FILE);
+    const assetsDir   = str(P + "ASSETS_DIR", D.assetsDir !== undefined ? D.assetsDir : "").replace(/^\/+|\/+$/g, "");
     const provider    = str(P + "PROVIDER", "git").toLowerCase(); // git | gitlab | gitea | github
     const files       = list(P + "FILES", D.files || DEFAULT_FILES);
     const pairs       = list(P + "SPRITE_PAIRS", D.pairs || DEFAULT_PAIRS);
@@ -126,6 +128,7 @@ function load(opts) {
         token,
         tokenUser,
         versionFile,
+        assetsDir,
         provider,
         files: fileEntries,
         pairs: pairEntries,

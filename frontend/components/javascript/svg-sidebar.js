@@ -1,5 +1,5 @@
 (function () {
-  const p = fetch('components/templates/svg-sidebar.html?v=20').then(r => r.text());
+  const p = fetch('components/templates/svg-sidebar.html?v=21').then(r => r.text());
   window._componentPromises = window._componentPromises || [];
   window._componentPromises.push(p);
 

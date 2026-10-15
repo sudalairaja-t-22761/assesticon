@@ -63,12 +63,12 @@
   // sidebar menu key → button selector, and which menu(s) open each page
   var MENU_SELECTORS = {
     create_sprite: '.sidebar-link[data-mode="new"]', update_sprite: '.sidebar-link[data-mode="existing"]', create_svg: '#createSvgBtn',
-    customise: '#helpDocBtn', library: '#iconLibraryBtn', figma: '#figmaBtn', webfont: '#webfontBtn', settings: '#settingsBtn',
+    customise: '#helpDocBtn', library: '#iconLibraryBtn', asset_store: '#assetStoreBtn', figma: '#figmaBtn', webfont: '#webfontBtn', settings: '#settingsBtn',
     saved_sprites: '#savedSpritesBtn', saved_webfonts: '#savedWebfontsBtn', saved_assets: '#savedAssetsBtn', most_used: '#mostUsedBtn',
     request_icon: '#requestIconNavBtn', requests: '#wfRequestsBtn', members: '#wfMembersBtn'
   };
   var PAGE_MENU = {
-    generator: ['create_sprite', 'update_sprite'], createsvg: ['create_svg'], helpdoc: ['customise'], iconlibrary: ['library'],
+    generator: ['create_sprite', 'update_sprite'], createsvg: ['create_svg'], helpdoc: ['customise'], iconlibrary: ['library'], assetstore: ['asset_store'],
     webfont: ['webfont'], savedsprites: ['saved_sprites'], savedwebfonts: ['saved_webfonts'], savedassets: ['saved_assets'], mostused: ['most_used'],
     requesticon: ['request_icon'], wfrequests: ['requests'], wfmembers: ['members']
   };
@@ -79,7 +79,7 @@
     return !keys || keys.some(menuAllowed);
   }
   function firstAllowedPage() {
-    var order = ['generator', 'iconlibrary', 'requesticon', 'wfrequests', 'mostused', 'savedsprites', 'savedwebfonts', 'savedassets', 'webfont', 'createsvg', 'helpdoc', 'wfmembers'];
+    var order = ['generator', 'iconlibrary', 'requesticon', 'wfrequests', 'mostused', 'savedsprites', 'savedwebfonts', 'savedassets', 'assetstore', 'webfont', 'createsvg', 'helpdoc', 'wfmembers'];
     return order.filter(pageAllowed)[0] || null;
   }
 

@@ -425,6 +425,42 @@ function createIsoGitProvider(cfg) {
             });
         },
 
+        /** Every file under `prefix` at the branch tip: { commit, commitInfo, files: [{ repoPath }] }. */
+        listFiles(prefix) {
+            return mutex(async () => {
+                const tip = await fetchTip();
+                if (!tip) return { commit: null, commitInfo: null, files: [] };
+                const root = String(prefix || "").replace(/^\/+|\/+$/g, "");
+                const files = [];
+                async function walk(oid, base) {
+                    const { tree } = await git.readTree({ fs, gitdir, oid });
+                    for (const e of tree) {
+                        const p = base ? base + "/" + e.path : e.path;
+                        if (e.type === "tree") await walk(e.oid, p);
+                        else if (e.type === "blob") files.push({ repoPath: p, oid: e.oid });
+                    }
+                }
+                let start;
+                try {
+                    start = root ? (await git.readTree({ fs, gitdir, oid: tip, filepath: root })).oid : (await git.readCommit({ fs, gitdir, oid: tip })).commit.tree;
+                } catch (e) {
+                    if (e && e.code === "NotFoundError") return { commit: tip, commitInfo: await commitInfo(tip), files: [] };
+                    throw wrap(e, `list ${root}`);
+                }
+                await walk(start, root);
+                return { commit: tip, commitInfo: await commitInfo(tip), files };
+            });
+        },
+
+        /** Read files of an already fetched commit (no network). content is null for a path that is not there. */
+        readAt(commitOid, paths) {
+            return mutex(async () => {
+                const out = [];
+                for (const repoPath of paths) out.push({ repoPath, content: await readPath(commitOid, repoPath) });
+                return out;
+            });
+        },
+
         writeFiles(files, opts) {
             opts = opts || {};
             return mutex(async () => {
@@ -613,6 +649,8 @@ function createRepoClient(cfg) {
             return { engine: p.engine || "git-cli", ...r };
         },
         async readFiles(paths) { return (await pick()).readFiles(paths); },
+        async listFiles(prefix) { const p = await pick(); if (!p.listFiles) throw new Error("Listing is not supported by the git CLI engine"); return p.listFiles(prefix); },
+        async readAt(commit, paths) { const p = await pick(); if (!p.readAt) throw new Error("Reading is not supported by the git CLI engine"); return p.readAt(commit, paths); },
         async writeFiles(files, opts) { return (await pick()).writeFiles(files, opts); }
     };
 }

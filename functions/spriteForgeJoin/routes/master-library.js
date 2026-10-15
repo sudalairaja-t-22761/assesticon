@@ -238,6 +238,82 @@ function createMasterLibraryRouter(deps) {
         res.send(entry.content);
     });
 
+    // ── Asset Store: every image under cfg.assetsDir (any image format) ───────
+    const IMAGE_TYPES = {
+        svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", jpe: "image/jpeg", jfif: "image/jpeg",
+        gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp", ico: "image/x-icon",
+        tif: "image/tiff", tiff: "image/tiff", apng: "image/apng", heic: "image/heic", heif: "image/heif"
+    };
+    const extOf = (p) => path.posix.extname(p).replace(/^\./, "").toLowerCase();
+    const assets = { files: [], commit: null, commitInfo: null, fetchedAt: null };
+    let assetsInflight = null;
+
+    function loadAssets() {
+        if (!cfg.assetsDir) return Promise.reject(Object.assign(new Error("No assets folder is configured for this repository"), { status: 404 }));
+        if (!cfg.isConfigured) return Promise.reject(notConfigured());
+        if (assetsInflight) return assetsInflight;
+        assetsInflight = (async () => {
+            try {
+                if (typeof client.listFiles !== "function") throw Object.assign(new Error("The configured repository provider cannot list files"), { status: 501 });
+                const r = await client.listFiles(cfg.assetsDir);
+                const prefix = cfg.assetsDir ? cfg.assetsDir + "/" : "";
+                assets.files = r.files
+                    .filter((f) => IMAGE_TYPES[extOf(f.repoPath)])
+                    .map((f) => {
+                        const rel = f.repoPath.slice(prefix.length);
+                        return { path: f.repoPath, name: path.posix.basename(f.repoPath), folder: path.posix.dirname(rel) === "." ? "" : path.posix.dirname(rel), ext: extOf(f.repoPath), type: IMAGE_TYPES[extOf(f.repoPath)] };
+                    })
+                    .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true }));
+                assets.commit = r.commit;
+                assets.commitInfo = r.commitInfo;
+                assets.fetchedAt = new Date().toISOString();
+                return assets;
+            } finally {
+                assetsInflight = null;
+            }
+        })();
+        return assetsInflight;
+    }
+
+    router.get("/assets", gate, async (req, res) => {
+        try {
+            if (String(req.query.refresh || "") === "1" || !assets.fetchedAt) await withDeadline(loadAssets(), "Reading the assets");
+            res.json({
+                success: true, dir: cfg.assetsDir, repo: repoConfig.publicConfig(cfg), commit: assets.commit,
+                commitInfo: assets.commitInfo, fetchedAt: assets.fetchedAt, count: assets.files.length, files: assets.files
+            });
+        } catch (err) {
+            console.error("[" + tag + "] assets:", err.message);
+            res.status(err.status || 502).json({ success: false, message: err.message });
+        }
+    });
+
+    router.get("/asset", gate, async (req, res) => {
+        const p = String(req.query.path || "").replace(/^\/+/, "");
+        const type = IMAGE_TYPES[extOf(p)];
+        if (!cfg.assetsDir || !p || p.split("/").includes("..") || !type || p.indexOf(cfg.assetsDir + "/") !== 0) {
+            return res.status(400).json({ success: false, message: "Not an image inside the " + (cfg.assetsDir || "assets") + " folder" });
+        }
+        try {
+            if (!assets.fetchedAt) await withDeadline(loadAssets(), "Reading the assets");
+            let [r] = await client.readAt(assets.commit, [p]);
+            if (!r.content) {
+                // The scratch clone may have been recycled — refetch once and retry.
+                await withDeadline(loadAssets(), "Reading the assets");
+                [r] = await client.readAt(assets.commit, [p]);
+            }
+            if (!r.content) return res.status(404).json({ success: false, message: p + " was not found in " + cfg.repoName + "@" + cfg.branch });
+            res.setHeader("Content-Type", type);
+            res.setHeader("Cache-Control", "private, max-age=300");
+            if (type === "image/svg+xml") res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+            if (assets.commit) res.setHeader("X-Repo-Commit", assets.commit);
+            res.send(r.content);
+        } catch (err) {
+            console.error("[" + tag + "] asset:", err.message);
+            res.status(err.status || 502).json({ success: false, message: err.message });
+        }
+    });
+
     router.post("/save", gate, async (req, res) => {
         try {
             if (!cfg.isConfigured) throw notConfigured();

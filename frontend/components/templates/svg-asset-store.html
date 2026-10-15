@@ -1,0 +1,28 @@
+<div class="content hidden" id="assetStorePage">
+  <div class="panel">
+    <div class="panel-header">
+      <h3 class="panel-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+          <polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
+        </svg>
+        Asset Store
+        <span class="as-count" id="assetStoreCount"></span>
+      </h3>
+      <div class="panel-actions">
+        <input type="search" class="as-search" id="assetStoreSearch" placeholder="Search images…" autocomplete="off">
+        <select class="as-filter" id="assetStoreFormat" title="Filter by format"><option value="">All formats</option></select>
+        <button class="btn btn-ghost btn-sm" id="refreshAssetStoreBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div id="assetStoreSummary" class="as-summary"></div>
+      <div id="assetStoreGrid"></div>
+    </div>
+  </div>
+</div>
