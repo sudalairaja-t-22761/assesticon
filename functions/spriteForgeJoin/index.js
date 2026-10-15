@@ -431,6 +431,8 @@ app.get("/api/auth/zoho/url", (req, res) => {
     authUrl.searchParams.set("scope", ZOHO_SCOPE);
     authUrl.searchParams.set("redirect_uri", resolveRedirectUri(req.query.redirect_origin));
     authUrl.searchParams.set("access_type", "offline");
+    // Zoho returns a refresh token only on the first consent unless asked again; the org user list needs it.
+    authUrl.searchParams.set("prompt", "consent");
 
     res.status(200).json({ success: true, url: authUrl.toString() });
 });

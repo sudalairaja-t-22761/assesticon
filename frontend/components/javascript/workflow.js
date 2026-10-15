@@ -64,12 +64,12 @@
   var MENU_SELECTORS = {
     create_sprite: '.sidebar-link[data-mode="new"]', update_sprite: '.sidebar-link[data-mode="existing"]', create_svg: '#createSvgBtn',
     customise: '#helpDocBtn', library: '#iconLibraryBtn', figma: '#figmaBtn', webfont: '#webfontBtn', settings: '#settingsBtn',
-    saved_sprites: '#savedSpritesBtn', saved_webfonts: '#savedWebfontsBtn', most_used: '#mostUsedBtn',
+    saved_sprites: '#savedSpritesBtn', saved_webfonts: '#savedWebfontsBtn', saved_assets: '#savedAssetsBtn', most_used: '#mostUsedBtn',
     request_icon: '#requestIconNavBtn', requests: '#wfRequestsBtn', members: '#wfMembersBtn'
   };
   var PAGE_MENU = {
     generator: ['create_sprite', 'update_sprite'], createsvg: ['create_svg'], helpdoc: ['customise'], iconlibrary: ['library'],
-    webfont: ['webfont'], savedsprites: ['saved_sprites'], savedwebfonts: ['saved_webfonts'], mostused: ['most_used'],
+    webfont: ['webfont'], savedsprites: ['saved_sprites'], savedwebfonts: ['saved_webfonts'], savedassets: ['saved_assets'], mostused: ['most_used'],
     requesticon: ['request_icon'], wfrequests: ['requests'], wfmembers: ['members']
   };
 
@@ -79,7 +79,7 @@
     return !keys || keys.some(menuAllowed);
   }
   function firstAllowedPage() {
-    var order = ['generator', 'iconlibrary', 'requesticon', 'wfrequests', 'mostused', 'savedsprites', 'savedwebfonts', 'webfont', 'createsvg', 'helpdoc', 'wfmembers'];
+    var order = ['generator', 'iconlibrary', 'requesticon', 'wfrequests', 'mostused', 'savedsprites', 'savedwebfonts', 'savedassets', 'webfont', 'createsvg', 'helpdoc', 'wfmembers'];
     return order.filter(pageAllowed)[0] || null;
   }
 
@@ -700,6 +700,13 @@
     }).join('');
   }
 
+  /** Values of the switched-on menu toggles inside a container. */
+  function checkedVals($box) {
+    return $box.find('input:checked').map(function () { return this.value; }).get();
+  }
+
+  function selectedRole() { return (wf.roles || []).filter(function (x) { return x.key === wf.roleSel; })[0]; }
+
   function renderRoles() {
     var roles = wf.roles || [];
     if (!roles.some(function (r) { return r.key === wf.roleSel; })) wf.roleSel = roles.length ? roles[0].key : null;
@@ -709,32 +716,62 @@
         '<span class="vf-role-name">' + esc(r.name) + '</span>' +
         '<span class="vf-msg">' + (r.key === 'user' ? 'No role assigned' : used + ' member' + (used === 1 ? '' : 's')) + (r.builtin ? '' : ' · Custom') + '</span></button>';
     }).join(''));
-    var r = roles.filter(function (x) { return x.key === wf.roleSel; })[0];
-    if (!r) { $('#wfRoleEditor').empty(); return; }
+    var r = selectedRole();
+    var warn = wf.rolesWarning ? '<div class="vf-modal-error">' + esc(wf.rolesWarning) + '</div>' : '';
+    if (!r) { $('#wfRoleEditor').html(warn); return; }
     var menus = r.fixed ? (wf.menuCatalog || []).map(function (m) { return m.key; }) : r.menus;
-    $('#wfRoleEditor').html(
+    $('#wfRoleEditor').html(warn +
       '<div class="vf-editor-head"><div><h4>' + esc(r.name) + (r.builtin ? ' <span class="vf-pill-tag">Built-in</span>' : ' <span class="vf-pill-tag">Custom</span>') + '</h4>' +
-        '<div class="vf-msg">' + esc(r.fixed ? 'Admin always has every menu, plus Members.' : r.key === 'user' ? 'Applies to signed-in users who have no member role.' : 'Choose the menus this role can open. Changes save immediately.') + '</div></div>' +
-        (r.builtin ? '' : '<button class="btn btn-ghost btn-sm vf-pill" data-vf-role-del="' + esc(r.key) + '" style="color:var(--danger)">Delete role</button>') + '</div>' +
+        '<div class="vf-msg">' + esc(r.fixed ? 'Admin always has every menu, plus Members.' : r.key === 'user' ? 'Applies to signed-in users who have no member role.' : 'Choose the menus this role can open, then click Save changes.') + '</div></div>' +
+        (r.builtin ? '' : '<div><button class="btn btn-ghost btn-sm vf-pill" data-vf-role-rename="' + esc(r.key) + '">Rename</button> ' +
+          '<button class="btn btn-ghost btn-sm vf-pill" data-vf-role-del="' + esc(r.key) + '" style="color:var(--danger)">Delete role</button></div>') + '</div>' +
       (r.fixed ? '' : '<div class="vf-bulk"><button type="button" class="vf-link" data-vf-bulk="all">Select all</button><button type="button" class="vf-link" data-vf-bulk="none">Clear all</button></div>') +
-      '<div class="vf-menu-grid" data-vf-role-menus="' + esc(r.key) + '">' + menuSwitches(menus, '', r.fixed) + '</div>');
+      '<div class="vf-menu-grid" data-vf-role-menus="' + esc(r.key) + '">' + menuSwitches(menus, '', r.fixed) + '</div>' +
+      (r.fixed ? '' : '<div class="vf-role-savebar"><span class="vf-msg" id="wfRoleDirty"></span>' +
+        '<button type="button" class="btn btn-ghost btn-sm vf-pill" id="wfRoleDiscard" disabled>Discard</button>' +
+        '<button type="button" class="btn btn-primary btn-sm vf-pill" id="wfRoleSave" disabled>Save changes</button></div>'));
   }
 
-  $(document).on('click', '[data-vf-role-pick]', function () { wf.roleSel = $(this).data('vf-role-pick'); renderRoles(); });
-
-  function saveRoleMenus($box) {
-    api('PATCH', 'roles/' + encodeURIComponent($box.data('vf-role-menus')), { menus: checkedVals($box) })
-      .then(function () {
-        var r = (wf.roles || []).filter(function (x) { return x.key === wf.roleSel; })[0];
-        if (r) r.menus = checkedVals($box);
-        SF.showToast('Menu access saved');
-      }).catch(function (e) { fail(e); loadMembers(); });
+  function roleDirty() {
+    var r = selectedRole(), $box = $('[data-vf-role-menus]');
+    if (!r || r.fixed || !$box.length) return false;
+    return checkedVals($box).slice().sort().join(',') !== (r.menus || []).slice().sort().join(',');
   }
-  $(document).on('change', '[data-vf-role-menus] input', function () { saveRoleMenus($(this).closest('[data-vf-role-menus]')); });
+  function refreshSaveBar() {
+    var dirty = roleDirty();
+    $('#wfRoleSave, #wfRoleDiscard').prop('disabled', !dirty);
+    $('#wfRoleDirty').text(dirty ? 'Unsaved changes' : '');
+  }
+  $(document).on('click', '[data-vf-role-pick]', function () {
+    if (roleDirty() && !window.confirm('Discard unsaved menu changes?')) return;
+    wf.roleSel = $(this).data('vf-role-pick'); renderRoles();
+  });
+
+  // Toggles only mark the role as changed; Save changes writes every menu's true/false to the role's row.
+  $(document).on('change', '[data-vf-role-menus] input', refreshSaveBar);
   $(document).on('click', '[data-vf-bulk]', function () {
-    var $box = $('[data-vf-role-menus]');
-    $box.find('input:not(:disabled)').prop('checked', $(this).data('vf-bulk') === 'all');
-    saveRoleMenus($box);
+    $('[data-vf-role-menus]').find('input:not(:disabled)').prop('checked', $(this).data('vf-bulk') === 'all');
+    refreshSaveBar();
+  });
+  $(document).on('click', '#wfRoleDiscard', renderRoles);
+  $(document).on('click', '#wfRoleSave', function () {
+    var $box = $('[data-vf-role-menus]'), roleKey = $box.data('vf-role-menus'), menus = checkedVals($box);
+    $('#wfRoleSave').prop('disabled', true).text('Saving…');
+    api('PATCH', 'roles/' + encodeURIComponent(roleKey), { menus: menus })
+      .then(function () {
+        var r = selectedRole();
+        if (r) r.menus = menus;
+        SF.showToast('Menu access saved');
+        loadMe(); // re-apply the sidebar if the signed-in user holds this role
+      })
+      .catch(fail)
+      .then(function () { $('#wfRoleSave').text('Save changes'); refreshSaveBar(); });
+  });
+  $(document).on('click', '[data-vf-role-rename]', function () {
+    var key = $(this).data('vf-role-rename'), r = (wf.roles || []).filter(function (x) { return x.key === key; })[0];
+    var name = r && window.prompt('Role name', r.name);
+    if (!name || !name.trim() || name.trim() === r.name) return;
+    api('PATCH', 'roles/' + encodeURIComponent(key), { name: name.trim() }).then(function () { SF.showToast('Role renamed'); loadMembers(); }).catch(fail);
   });
 
   function loadMembers() {
@@ -742,6 +779,7 @@
       wf.members = res[0].members || [];
       wf.roles = res[1].roles || [];
       wf.menuCatalog = res[1].menus || [];
+      wf.rolesWarning = res[1].warning || res[0].warning || '';
       wf.requests = res[2].requests || [];
       renderMembers();
       renderRoles();

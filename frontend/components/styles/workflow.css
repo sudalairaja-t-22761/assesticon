@@ -186,3 +186,7 @@
 .vf-mailtest-ok { background: var(--success-bg); color: var(--success); }
 .vf-mailtest-bad { background: #FCE8E6; color: var(--danger); }
 .vf-mailtest .vf-msg { margin-top: 2px; color: inherit; opacity: .8; }
+
+/* Roles editor: Save bar */
+.vf-role-savebar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-light); }
+.vf-role-savebar .vf-msg { margin-right: auto; color: var(--warning); font-weight: 500; }

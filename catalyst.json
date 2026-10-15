@@ -5,7 +5,8 @@
   "functions": {
     "targets": [
       "spriteForgeJoin",
-      "upload-to-stratus"
+      "upload-to-stratus",
+      "save-assets"
     ],
     "source": "functions"
   },

@@ -1,0 +1,12 @@
+{
+  "name": "save-assets",
+  "version": "1.0.0",
+  "description": "Zoho Catalyst Advanced I/O Function — Save a user's asset images to Stratus under Savedassest/<username>/<branch>/",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "dependencies": {
+    "busboy": "^1.6.0",
+    "zcatalyst-sdk-node": "^3.4.0"
+  },
+  "engines": { "node": ">=18" }
+}

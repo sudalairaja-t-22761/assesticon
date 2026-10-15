@@ -33,7 +33,7 @@ const express = require("express");
 const store = require("../lib/store");
 const orgUsers = require("../lib/org-users");
 const { sendMail, approvalMail } = require("../lib/mailer");
-const { MENUS, loadRoles, getAccess, requireRole, norm, slug, menuList, isExpired, approverOf, BUILTIN } = require("../lib/roles");
+const { MENUS, MENU_KEYS, loadRoles, syncRoleRows, setRoleMenu, setRoleMenus, createRole, renameRole, deleteRole, getAccess, requireRole, norm, slug, menuList, isExpired, approverOf, BUILTIN } = require("../lib/roles");
 
 // ALLOW_SELF_APPROVAL=true lets a requester who is also an approver review (and be mailed about) their own request.
 // Off by default: verification means a second person looks at it. Turn it on for very small teams or for testing.
@@ -234,8 +234,8 @@ function createWorkflowRouter({ requireSession }) {
 
     router.get("/members", requireRole(["admin"]), wrap(async (req, res) => {
         const db = store.forRequest(req);
-        try { await db.syncMirrors("members"); } catch (_) { /* readable columns are optional */ }
-        res.json({ success: true, members: await db.all("members") });
+        const moved = await db.migrate("members").catch((e) => ({ ok: false, error: e.message })); // first time: copy old members across
+        res.json({ success: true, members: await db.all("members"), warning: moved.ok ? "" : moved.error });
     }));
 
     router.post("/members", requireRole(["admin"]), wrap(async (req, res) => {
@@ -290,7 +290,9 @@ function createWorkflowRouter({ requireSession }) {
     }
 
     router.get("/roles", requireRole(["admin"]), wrap(async (req, res) => {
-        res.json({ success: true, roles: await loadRoles(req), menus: MENUS });
+        let warning = "";
+        await syncRoleRows(req).catch((e) => { warning = e.message; console.error("[roles] sync:", e.message); }); // every role × menu gets a row
+        res.json({ success: true, roles: await loadRoles(req), menus: MENUS, warning });
     }));
 
     router.post("/roles", requireRole(["admin"]), wrap(async (req, res) => {
@@ -300,18 +302,44 @@ function createWorkflowRouter({ requireSession }) {
         if (BUILTIN[key] || (await loadRoles(req)).some((r) => r.key === key || r.name.toLowerCase() === name.toLowerCase())) {
             return res.status(409).json({ success: false, message: "A role with this name already exists" });
         }
-        const row = await store.forRequest(req).insert("roles", { key, name, menus: menuList(req.body.menus).join(","), createdBy: me(req).email || "" });
-        res.json({ success: true, role: { key, name, menus: menuList(row.menus) } });
+        await createRole(req, { key, name, menus: req.body.menus });
+        res.json({ success: true, role: { key, name, menus: menuList(req.body.menus) } });
     }));
 
+    async function editableRole(req, res) {
+        let role = (await loadRoles(req)).find((r) => r.key === req.params.key);
+        if (role && !role.rowId && !role.fixed) { // built-in role not seeded yet: add its row first
+            await syncRoleRows(req);
+            role = (await loadRoles(req)).find((r) => r.key === req.params.key);
+        }
+        if (!role) { res.status(404).json({ success: false, message: "Role not found" }); return null; }
+        if (role.fixed) { res.status(400).json({ success: false, message: "Admin always has every menu" }); return null; }
+        return role;
+    }
+
+    // Edit a role: rename it (custom roles only) and/or set all of its menus at once.
     router.patch("/roles/:key", requireRole(["admin"]), wrap(async (req, res) => {
-        const db = store.forRequest(req);
-        const role = (await loadRoles(req)).find((r) => r.key === req.params.key);
-        if (!role) return res.status(404).json({ success: false, message: "Role not found" });
-        if (role.fixed) return res.status(400).json({ success: false, message: "Admin always has every menu" });
-        const menus = menuList(req.body.menus).join(",");
-        if (role.rowId) await db.update("roles", role.rowId, { menus });
-        else await db.insert("roles", { key: role.key, name: role.name, menus, createdBy: me(req).email || "" }); // override of a built-in
+        const role = await editableRole(req, res);
+        if (!role) return;
+        if (req.body.name !== undefined) {
+            const name = str(req.body.name, 40).trim();
+            if (role.builtin) return res.status(400).json({ success: false, message: "Built-in roles cannot be renamed" });
+            if (!name) return res.status(400).json({ success: false, message: "Role name required" });
+            if ((await loadRoles(req)).some((r) => r.key !== role.key && r.name.toLowerCase() === name.toLowerCase())) {
+                return res.status(409).json({ success: false, message: "A role with this name already exists" });
+            }
+            await renameRole(req, role.rowId, name);
+        }
+        if (req.body.menus !== undefined) await setRoleMenus(req, role.rowId, req.body.menus);
+        res.json({ success: true });
+    }));
+
+    // One toggle: { allowed: true|false } for a single menu of a role — saved straight to that menu's column on the role's row.
+    router.patch("/roles/:key/menus/:menu", requireRole(["admin"]), wrap(async (req, res) => {
+        const role = await editableRole(req, res);
+        if (!role) return;
+        if (!MENU_KEYS.includes(req.params.menu)) return res.status(400).json({ success: false, message: "Unknown menu" });
+        await setRoleMenu(req, role.rowId, req.params.menu, req.body.allowed === true || req.body.allowed === "true");
         res.json({ success: true });
     }));
 
@@ -323,7 +351,7 @@ function createWorkflowRouter({ requireSession }) {
         if ((await db.all("members")).some((m) => m.memberType === role.key)) {
             return res.status(409).json({ success: false, message: "Members still have this role — change their role first" });
         }
-        await db.remove("roles", role.rowId);
+        await deleteRole(req, role.rowId);
         res.json({ success: true });
     }));
 

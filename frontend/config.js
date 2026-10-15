@@ -3,6 +3,8 @@
     window.SF_CATALYST_API_BASE = isLocal
         ? 'http://localhost:3001/'
         : 'https://assets-icons-management-60067235816.development.catalystserverless.in/server/spriteForgeJoin/';
+    // save-assets function: GET lists a user's Savedassest/<username>/ tree, POST saves images.
+    window.SF_SAVE_ASSETS_API = 'https://assets-icons-management-60067235816.development.catalystserverless.in/server/save-assets/';
     window.SF_AUTH_ENABLED     = true;
     window.SF_AUTH_STORAGE_KEY = 'sf_session_id';
 

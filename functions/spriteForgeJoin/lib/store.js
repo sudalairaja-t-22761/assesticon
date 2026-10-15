@@ -24,13 +24,34 @@ const path = require("path");
 const catalyst = require("zcatalyst-sdk-node");
 
 const STORE_TABLE = process.env.WORKFLOW_TABLE || "workflow_store";
-const REAL_TABLES = new Set(["user_data"]);       // existing tables with their own columns
+const REAL_TABLES = new Set(["user_data", "roles"]); // tables with their own columns (see lib/roles.js for `roles`)
 const MAX_DATA = 10000;                            // Catalyst "Text" column limit
 // Readable copies of key fields, written next to the JSON (members only).
 const MIRRORS = {
     members: (r) => ({ email: r.userEmail || "", role: r.memberType || "", approverType: r.approverType || "", expiresAt: r.expiresAt || "" })
 };
 const mirrorOf = (table, record) => (MIRRORS[table] ? MIRRORS[table](record) : {});
+
+// Tables kept in their own Data Store table with readable columns, while the app keeps using its own field names.
+//   members: user_name, user_email, role, approver, added_on, expires_at (required) · user_avatar (Text), added_by (optional)
+// If the table does not exist yet, reads and writes quietly use the generic `workflow_store` rows as before.
+const MAPPED = {
+    members: {
+        required: { userName: "user_name", userEmail: "user_email", memberType: "role", approverType: "approver", addedOn: "added_on", expiresAt: "expires_at" },
+        optional: { userAvatar: "user_avatar", addedBy: "added_by" }
+    }
+};
+const MAP_CHUNK = 50;
+function toRow(fields, cols) {
+    const out = {};
+    for (const [field, col] of Object.entries(cols)) if (fields[field] !== undefined) out[col] = fields[field] == null ? "" : String(fields[field]);
+    return out;
+}
+function fromRow(spec, row) {
+    const out = { ROWID: row.ROWID, CREATEDTIME: row.added_on || row.CREATEDTIME };
+    for (const [field, col] of Object.entries({ ...spec.required, ...spec.optional })) if (field !== "addedOn") out[field] = row[col] == null ? "" : row[col];
+    return out;
+}
 
 const LOCAL_FILE = path.join(os.tmpdir(), "svgforge-workflow.json");
 
@@ -82,6 +103,9 @@ function forRequest(req) {
                 localWrite(db);
                 return saved;
             },
+            async insertMany(table, rows) { const out = []; for (const r of rows) out.push(await this.insert(table, r)); return out; },
+            async legacy() { return []; },
+            async migrate() { return { ok: true, moved: 0 }; },
             async update(table, id, fields) {
                 const db = localRead();
                 const list = db[table] || [];
@@ -102,7 +126,85 @@ function forRequest(req) {
 
     const ds = catalyst.initialize(req).datastore();
     const store = () => ds.table(STORE_TABLE);
-    return {
+    const ldb = {}; // generic-store implementations, used when a mapped table is not available
+    const mapped = {
+        // Insert rows into a mapped table. The first row is inserted alone to learn whether the optional columns
+        // exist (dropped for good once one is rejected), then the rest go in together — never retried, so no duplicates.
+        optionalOk: true,
+        async insertRows(table, rows) {
+            const spec = MAPPED[table], out = [];
+            const shape = (r) => (mapped.optionalOk ? { ...toRow(r, spec.required), ...toRow(r, spec.optional) } : toRow(r, spec.required));
+            let first;
+            try { first = await ds.table(table).insertRow(shape(rows[0])); }
+            catch (e) {
+                if (!mapped.optionalOk) throw e;
+                // Retry with the required columns only. If that works the optional columns are simply not created
+                // (skip them from now on); if it fails too, the problem is something else (e.g. no table) — rethrow.
+                first = await ds.table(table).insertRow(toRow(rows[0], spec.required));
+                mapped.optionalOk = false;
+            }
+            out.push(flatten(first, table));
+            const rest = rows.slice(1).map(shape);
+            for (let i = 0; i < rest.length; i += MAP_CHUNK) {
+                out.push(...((await ds.table(table).insertRows(rest.slice(i, i + MAP_CHUNK))) || []).map((r) => flatten(r, table)));
+            }
+            return out;
+        }
+    };
+    const api = {
+        async all(table) {
+            if (MAPPED[table]) {
+                try { return ((await ds.table(table).getAllRows()) || []).map((r) => fromRow(MAPPED[table], flatten(r, table))); }
+                catch (e) { console.error(`[store] table "${table}" unavailable, using workflow_store:`, e.message); }
+            }
+            return ldb.all(table);
+        },
+        // Copy members saved in workflow_store into the real table the first time it exists (keeps Added On).
+        async migrate(table) {
+            const spec = MAPPED[table];
+            let rows;
+            try { rows = (await ds.table(table).getAllRows()) || []; }
+            catch (e) { return { ok: false, error: `Data Store table "${table}" is missing or has the wrong columns. Create it with Var Char columns ${Object.values(spec.required).join(", ")} (and optional ${Object.values(spec.optional).join(", ")}). Details: ${e.message}` }; }
+            if (rows.length) return { ok: true, moved: 0 };
+            const legacy = await ldb.legacy(table);
+            if (!legacy.length) return { ok: true, moved: 0 };
+            const saved = await mapped.insertRows(table, legacy.map((l) => ({ ...l, addedOn: l.addedOn || l.CREATEDTIME || new Date().toISOString() })));
+            return { ok: true, moved: saved.length };
+        },
+        async insert(table, row) {
+            if (MAPPED[table]) {
+                try {
+                    const rec = { ...row, addedOn: row.addedOn || new Date().toISOString() };
+                    const [saved] = await mapped.insertRows(table, [rec]);
+                    return { ...row, ROWID: saved.ROWID, CREATEDTIME: rec.addedOn };
+                } catch (e) { console.error(`[store] insert into "${table}" failed, using workflow_store:`, e.message); }
+            }
+            return ldb.insert(table, row);
+        },
+        async update(table, id, fields) {
+            if (MAPPED[table]) {
+                const spec = MAPPED[table];
+                try {
+                    let updated;
+                    try { updated = await ds.table(table).updateRow({ ROWID: id, ...toRow(fields, spec.required), ...toRow(fields, spec.optional) }); }
+                    catch (e) { updated = await ds.table(table).updateRow({ ROWID: id, ...toRow(fields, spec.required) }); }
+                    return fromRow(spec, flatten(updated, table));
+                } catch (e) { console.error(`[store] update in "${table}" failed, using workflow_store:`, e.message); }
+            }
+            return ldb.update(table, id, fields);
+        },
+        async remove(table, id) {
+            if (MAPPED[table]) {
+                try { await ds.table(table).deleteRow(id); return; }
+                catch (e) { console.error(`[store] delete from "${table}" failed, using workflow_store:`, e.message); }
+            }
+            return ldb.remove(table, id);
+        },
+        async insertMany(table, rows) { return ldb.insertMany(table, rows); },
+        async legacy(table) { return ldb.legacy(table); },
+        async syncMirrors(table) { return ldb.syncMirrors(table); }
+    };
+    Object.assign(ldb, {
         async all(table) {
             if (REAL_TABLES.has(table)) return ((await ds.table(table).getAllRows()) || []).map((r) => flatten(r, table));
             const rows = (await guard(() => store().getAllRows()) || []).map((r) => flatten(r, STORE_TABLE));
@@ -116,6 +218,19 @@ function forRequest(req) {
             try { saved = await write({ ...base, ...extra }); }
             catch (e) { if (!Object.keys(extra).length) throw e; saved = await write(base); } // mirror columns not created yet
             return { ...row, ROWID: saved.ROWID, CREATEDTIME: saved.CREATEDTIME };
+        },
+        // Several rows in one call (real tables only).
+        async insertMany(table, rows) {
+            if (!rows.length) return [];
+            const saved = await ds.table(table).insertRows(rows);
+            return (saved || []).map((r) => flatten(r, table));
+        },
+        // Rows an older version kept as JSON in the generic `workflow_store` table (coll = table).
+        async legacy(table) {
+            try {
+                const rows = (await store().getAllRows() || []).map((r) => flatten(r, STORE_TABLE));
+                return rows.filter((r) => r.coll === table).map(decode);
+            } catch (_) { return []; }
         },
         async update(table, id, fields) {
             if (REAL_TABLES.has(table)) return flatten(await ds.table(table).updateRow({ ...fields, ROWID: id }), table);
@@ -142,7 +257,8 @@ function forRequest(req) {
             }
             return n;
         }
-    };
+    });
+    return api;
 }
 
 module.exports = { forRequest, STORE_TABLE, MAX_DATA };

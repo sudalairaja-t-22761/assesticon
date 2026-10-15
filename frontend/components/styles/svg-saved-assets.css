@@ -1,0 +1,45 @@
+/* ============================================================
+   SAVED ASSETS PAGE — folder tree + image previews
+   ============================================================ */
+.sa-owner { font-size: 12px; font-weight: 500; color: var(--text-tertiary); margin-left: 8px; }
+.sa-summary { font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; }
+.sa-empty { text-align: center; padding: 48px 16px; color: var(--text-tertiary); font-size: 13px; }
+.sa-error { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--danger-bg); color: var(--danger); font-size: 13px; }
+
+.sa-folder { margin: 2px 0; }
+.sa-folder > summary {
+  display: flex; align-items: center; gap: 8px; padding: 7px 8px; cursor: pointer;
+  list-style: none; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; color: var(--text-primary);
+  user-select: none;
+}
+.sa-folder > summary::-webkit-details-marker { display: none; }
+.sa-folder > summary:hover { background: var(--bg-hover); }
+.sa-folder > summary::before {
+  content: ''; width: 6px; height: 6px; border-right: 2px solid var(--text-tertiary); border-bottom: 2px solid var(--text-tertiary);
+  transform: rotate(-45deg); transition: transform var(--transition); flex-shrink: 0;
+}
+.sa-folder[open] > summary::before { transform: rotate(45deg); }
+.sa-folder-count { margin-left: auto; font-size: 11px; font-weight: 500; color: var(--text-tertiary); }
+.sa-folder-body { margin-left: 14px; padding-left: 12px; border-left: 1px solid var(--border-light); }
+
+.sa-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; padding: 8px 0 4px; }
+.sa-card {
+  background: var(--bg-panel); border: 1px solid var(--border-light); border-radius: var(--radius);
+  padding: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.sa-card:hover { border-color: var(--accent); box-shadow: var(--shadow-sm); }
+.sa-thumb {
+  height: 84px; display: flex; align-items: center; justify-content: center;
+  background: var(--bg-input); border-radius: var(--radius-sm); overflow: hidden; cursor: zoom-in;
+}
+.sa-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.sa-name { font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-meta { font-size: 10px; color: var(--text-tertiary); }
+
+.sa-lightbox {
+  position: fixed; inset: 0; z-index: 10000; background: rgba(0, 0, 0, .65);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; cursor: zoom-out;
+}
+.sa-lightbox img { max-width: 80vw; max-height: 70vh; background: #fff; border-radius: var(--radius); padding: 16px; }
+.sa-lightbox span { color: #fff; font-size: 13px; }
