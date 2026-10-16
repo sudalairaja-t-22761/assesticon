@@ -36,7 +36,9 @@ const ROOT_FOLDER = 'Savedassest';
 
 const MIME = {
   svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-  gif: 'image/gif', webp: 'image/webp', ico: 'image/x-icon'
+  gif: 'image/gif', webp: 'image/webp', ico: 'image/x-icon',
+  avif: 'image/avif', bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff',
+  apng: 'image/apng', heic: 'image/heic', heif: 'image/heif', jfif: 'image/jpeg'
 };
 
 function sendJSON(res, statusCode, body) {
@@ -122,7 +124,7 @@ async function drain(body) {
  * and the image is small enough).
  */
 async function listUserAssets(req, res) {
-  const query    = new URL(req.url || '/', 'http://localhost').searchParams;
+  const query    = new URLSearchParams(String(req.url || '').split('?')[1] || '');
   const user     = safeSegment(query.get('username'));
   const branch   = safeSegment(query.get('branch'));
   const inline   = query.get('inline') === '1' || query.get('inline') === 'true';
