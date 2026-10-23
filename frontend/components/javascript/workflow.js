@@ -508,7 +508,7 @@
   // Push: add the single icon to the chosen sprite of the main library repo, then record it.
   $(document).on('click', '#wfPushBtn', function () {
     var r = wf.open, $btn = $(this).prop('disabled', true);
-    var file = r.targetSprite + '.svg';
+    var file = r.targetSprite + '.svg', pushedVersion = null;
     var done = function () { $btn.prop('disabled', false); };
     SF.showToast('Adding ' + r.iconName + ' to ' + file + '…');
     SF.fetchMasterLibraryFile(file).then(function (text) {
@@ -531,9 +531,11 @@
         });
       });
     }).then(function (out) {
+      if (out && typeof SF.setLibraryVersion === 'function') SF.setLibraryVersion(out);
+      pushedVersion = out && out.release ? out.release.version : null;
       return api('POST', 'requests/' + r.ROWID + '/push', { commitSha: (out && out.commit) || '' });
     }).then(function () {
-      SF.showToast('Pushed to ' + file);
+      SF.showToast('Pushed to ' + file + (pushedVersion ? ' · published ' + pushedVersion : ''));
       return Promise.all([loadRequests(), loadStatuses()]);
     }).catch(fail).then(done);
   });

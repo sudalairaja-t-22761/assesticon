@@ -13,6 +13,11 @@
   'use strict';
 
   var state = SF.state;
+  // SVG / XLink namespace URIs, read from the browser's HTML parser (it puts <svg> and xlink:href in them).
+  var _nsProbe = document.createElement('div');
+  _nsProbe.innerHTML = '<svg><use xlink:href="#x"></use></svg>';
+  var SVG_NAMESPACE = _nsProbe.firstChild.namespaceURI;
+  var XLINK_NAMESPACE = _nsProbe.querySelector('use').attributes[0].namespaceURI;
 
   SF.repoLib = {
     icons: [],         // Library-shaped icon descriptors (source: 'repo')
@@ -120,7 +125,7 @@
     var needsStyle = spriteStyle && /\bclass\s*=|var\(--/.test(content);
     var needsDefs  = spriteDefs && /url\(\s*#|\b(xlink:)?href\s*=\s*["']#/.test(content);
     var rootAttrs  = SF.buildPreviewAttrs(icon);
-    return '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="' +
+    return '<svg xmlns="' + SVG_NAMESPACE + '" xmlns:xlink="' + XLINK_NAMESPACE + '" viewBox="' +
       icon.originX + ' ' + icon.originY + ' ' + icon.width + ' ' + icon.height +
       '" width="' + _num(icon.width) + '" height="' + _num(icon.height) + '"' + rootAttrs + '>' +
       (needsDefs ? '<defs>' + spriteDefs + '</defs>' : '') +
@@ -729,6 +734,20 @@
       (cfg.branch ? ' @ ' + cfg.branch : '') + (v.commit ? ' · ' + String(v.commit).slice(0, 8) : ''));
     $('#libVersionName').text(v.name || (v.file || 'package.json'));
   }
+
+  /**
+   * Show the version a save just committed (save response: packageVersion / release) in the Library version bar
+   * without waiting for a page reload or sync.
+   */
+  SF.setLibraryVersion = function (res) {
+    if (!res) return;
+    var v = res.packageVersion ||
+      (res.release ? { name: res.release.name, version: res.release.version, file: 'resources/package.json', commit: res.commit || null } : null);
+    if (!v || !v.version) return;
+    SF.repoLib.version = v;
+    if (res.repo) SF.repoLib.versionRepo = res.repo;
+    _renderVersion();
+  };
 
   SF.setRepoLibraryError = function (msg) {
     SF.repoLib.loading = false;

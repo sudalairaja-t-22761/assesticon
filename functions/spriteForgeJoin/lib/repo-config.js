@@ -29,8 +29,10 @@ function bool(name, fallback) {
     return ["1", "true", "yes", "on"].includes(v.toLowerCase());
 }
 
-const DEFAULT_BASE_URL     = "https://repository.zohocorpcloud.in";
-const DEFAULT_GIT_HOST     = "https://zrepository.zohocorpcloud.in";
+// Hosts come from the environment (REPO_BASE_URL / REPO_GIT_URL in .env); the icon repo reuses them unless it sets its own.
+const originOf = (u) => { try { return new URL(u).origin; } catch (_) { return ""; } };
+const DEFAULT_BASE_URL     = () => str("REPO_BASE_URL", "");
+const DEFAULT_GIT_HOST     = () => originOf(str("REPO_GIT_URL", ""));
 const DEFAULT_PROJECT_PATH = "zohocorp/CRM/CRM_UI/CRM_UI_LIBRARY";
 const DEFAULT_REPO_NAME    = "CRM_UI_LIBRARY";
 const DEFAULT_BRANCH       = "CRM_UI_LIBRARY_ICON_TOOL";
@@ -75,15 +77,28 @@ function load(opts) {
     const P = opts.prefix || "REPO_";
     const D = opts.defaults || {};
     const env = (k) => str(P + k, "");
-    const baseUrl     = str(P + "BASE_URL", DEFAULT_BASE_URL).replace(/\/+$/, "");
+    const baseUrl     = str(P + "BASE_URL", DEFAULT_BASE_URL()).replace(/\/+$/, "");
     const projectPath = str(P + "PROJECT_PATH", D.projectPath || DEFAULT_PROJECT_PATH).replace(/^\/+|\/+$/g, "");
     const repoName    = str(P + "NAME", D.repoName || DEFAULT_REPO_NAME);
     const branch      = str(P + "BRANCH", D.branch || DEFAULT_BRANCH);
-    const gitUrl      = str(P + "GIT_URL", `${str(P + "GIT_HOST", DEFAULT_GIT_HOST).replace(/\/+$/, "")}/${projectPath}.git`);
+    const gitUrl      = str(P + "GIT_URL", `${str(P + "GIT_HOST", DEFAULT_GIT_HOST()).replace(/\/+$/, "")}/${projectPath}.git`);
     const token       = str(P + "TOKEN", opts.tokenFallback ? str(opts.tokenFallback, "") : "");
     const tokenUser   = str(P + "TOKEN_USER", "oauth2");
     // File (relative to the repo root) whose "version" is shown at the top of the Library. "" disables it.
     const versionFile = str(P + "VERSION_FILE", D.versionFile !== undefined ? D.versionFile : DEFAULT_VERSION_FILE);
+    // Release on every save: bump <npmDir>/package.json "version" (X.Y.Z-<tag>-N, N = 1..max, then Z+1 and N = 1),
+    // npm publish that folder to npmRegistry, and commit the bump with the saved files. Off unless NPM_PUBLISH=true.
+    const npm = {
+        enabled:  bool(P + "NPM_PUBLISH", false),
+        dir:      str(P + "NPM_DIR", "resources"),
+        registry: str(P + "NPM_REGISTRY", ""),
+        token:    str(P + "NPM_TOKEN", ""),     // optional; otherwise the server user's ~/.npmrc login is used
+        distTag:  str(P + "NPM_DIST_TAG", ""),  // optional `npm publish --tag`
+        preTag:   str(P + "VERSION_TAG", "icontool"),
+        preMax:   Math.max(1, parseInt(str(P + "VERSION_MAX", "5"), 10) || 5),
+        dryRun:   bool(P + "NPM_DRY_RUN", false),
+        timeoutMs: Math.max(30000, parseInt(str(P + "NPM_TIMEOUT_MS", "240000"), 10) || 240000)
+    };
     const assetsDir   = str(P + "ASSETS_DIR", D.assetsDir !== undefined ? D.assetsDir : "").replace(/^\/+|\/+$/g, "");
     const provider    = str(P + "PROVIDER", "git").toLowerCase(); // git | gitlab | gitea | github
     const files       = list(P + "FILES", D.files || DEFAULT_FILES);
@@ -129,6 +144,7 @@ function load(opts) {
         tokenUser,
         versionFile,
         assetsDir,
+        npm,
         provider,
         files: fileEntries,
         pairs: pairEntries,

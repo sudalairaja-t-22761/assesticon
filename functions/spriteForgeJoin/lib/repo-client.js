@@ -5,7 +5,7 @@
  *
  * Providers (REPO_PROVIDER):
  *   git     (default) — plain git over HTTPS using the `git` binary. This is what
- *                        ZohoRepository exposes at https://zrepository.zohocorpcloud.in
+ *                        ZohoRepository exposes at the configured REPO_BASE_URL
  *                        (Basic auth: REPO_TOKEN_USER / REPO_TOKEN). A sparse, shallow
  *                        clone is cached in os.tmpdir() and only the configured files
  *                        are checked out.
@@ -246,10 +246,11 @@ function createGitProvider(cfg) {
 // isomorphic-git) turns that into "Request timed out". A push waits silently while the
 // server processes the pack, so it needs agents without an idle timeout; the limits
 // below still stop a host that never answers.
-const NO_IDLE_AGENTS = {
-    "http:":  new (require("http").Agent)({ keepAlive: true, timeout: 0 }),
-    "https:": new (require("https").Agent)({ keepAlive: true, timeout: 0 })
-};
+// Keyed by protocol ("http:" / "https:", as URL#protocol reports it), taken from each module's own agent.
+const NO_IDLE_AGENTS = {};
+for (const mod of [require("http"), require("https")]) {
+    NO_IDLE_AGENTS[mod.globalAgent.protocol] = new mod.Agent({ keepAlive: true, timeout: 0 });
+}
 
 function httpWithTimeout(http, ms, host, pushMs) {
     return {
@@ -341,6 +342,28 @@ function createIsoGitProvider(cfg) {
             if (e && e.code === "NotFoundError") return null;
             throw wrap(e, `read ${repoPath}`);
         }
+    }
+
+    /** Write every file under `dir` at `commitOid` into `out` (a plain folder, e.g. for npm publish). */
+    async function exportDir(commitOid, dir, out) {
+        const { oid } = await git.readTree({ fs, gitdir, oid: commitOid, filepath: dir });
+        let count = 0;
+        async function walk(treeOid, rel) {
+            const { tree } = await git.readTree({ fs, gitdir, oid: treeOid });
+            for (const e of tree) {
+                const p = path.join(out, rel, e.path);
+                if (e.type === "tree") { fs.mkdirSync(p, { recursive: true }); await walk(e.oid, path.join(rel, e.path)); }
+                else if (e.type === "blob") {
+                    const { blob } = await git.readBlob({ fs, gitdir, oid: e.oid });
+                    fs.mkdirSync(path.dirname(p), { recursive: true });
+                    fs.writeFileSync(p, Buffer.from(blob), { mode: e.mode === "100755" ? 0o755 : 0o644 });
+                    count++;
+                }
+            }
+        }
+        fs.mkdirSync(out, { recursive: true });
+        await walk(oid, "");
+        return count;
     }
 
     /** New tree oid = tree of `treeOid` with `files` ({ "a/b.svg": Buffer }) written in. */
@@ -467,15 +490,26 @@ function createIsoGitProvider(cfg) {
                 const name  = opts.authorName  || cfg.authorName;
                 const email = opts.authorEmail || cfg.authorEmail;
                 const message = opts.message || `Update ${files.map((f) => path.posix.basename(f.repoPath)).join(", ")} via SpriteForge`;
+                // opts.prepare(read)            → extra files added to the same commit (computed once, from the first tip)
+                // opts.beforePush(oid, exportDir) → runs after the commit is built and before it is pushed (once);
+                //                                   throwing aborts the save so nothing is pushed.
+                let extra = null, prepared = null;
                 for (let attempt = 0; attempt < 2; attempt++) {
                     const tip = await fetchTip();
                     let oid;
-                    try { oid = await buildCommit(tip, files, { name, email, message }); }
-                    catch (e) { throw wrap(e, "git commit"); }
+                    try {
+                        oid = await buildCommit(tip, files, { name, email, message });
+                        if (oid && opts.prepare) {
+                            if (!extra) extra = await opts.prepare((p) => (tip ? readPath(tip, p) : null));
+                            oid = await buildCommit(tip, files.concat(extra.files || []), { name, email, message: extra.message || message });
+                        }
+                    }
+                    catch (e) { throw e.keep ? e : wrap(e, "git commit"); }
                     if (!oid) return { changed: false, pushed: false, commit: tip, branch: cfg.branch, message: "No changes — repository already has this content" };
+                    if (opts.beforePush && !prepared) prepared = await opts.beforePush(oid, (dir, out) => exportDir(oid, dir, out));
                     try {
                         await pushCommit(oid);
-                        return { changed: true, pushed: true, commit: oid, branch: cfg.branch, message };
+                        return { changed: true, pushed: true, commit: oid, branch: cfg.branch, message: (extra && extra.message) || message, prepared: extra, published: prepared };
                     } catch (e) {
                         // Someone pushed in between: rebuild the same file changes on the new tip once.
                         const rejected = e.rejected || /reject|non-fast-forward|fetch first|not a fast/i.test(e.message || "");

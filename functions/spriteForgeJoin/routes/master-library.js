@@ -34,6 +34,7 @@ const { execFile } = require("child_process");
 
 const repoConfig = require("../lib/repo-config");
 const { createRepoClient } = require("../lib/repo-client");
+const npmRelease = require("../lib/npm-release");
 
 /**
  * @param {object} deps
@@ -124,8 +125,8 @@ function createMasterLibraryRouter(deps) {
     }
 
     /** Answer within the request deadline even if the repository hangs (the fetch keeps going). */
-    function withDeadline(promise, what) {
-        const ms = cfg.requestTimeoutMs;
+    function withDeadline(promise, what, overrideMs) {
+        const ms = overrideMs || cfg.requestTimeoutMs;
         let timer;
         const limit = new Promise((_, reject) => {
             timer = setTimeout(() => reject(Object.assign(
@@ -336,14 +337,26 @@ function createMasterLibraryRouter(deps) {
             }
 
             const user = userOf(req) || { name: "SpriteForge user", email: "" };
+            const message = body.message || `Update ${prepared.map((p) => p.meta.name).join(", ")} via SpriteForge (${user.name || user.email})`;
+            const writeOpts = { message, authorName: user.name || cfg.authorName, authorEmail: user.email || cfg.authorEmail };
+            if (cfg.npm && cfg.npm.enabled) {
+                // Release: bump <dir>/package.json → npm publish → commit + push (the push only happens after a successful publish).
+                const pkgPath = path.posix.join(cfg.npm.dir, "package.json");
+                let release = null;
+                writeOpts.prepare = async (read) => {
+                    const buf = await read(pkgPath);
+                    if (!buf) throw Object.assign(new Error(`${pkgPath} was not found on ${cfg.branch}`), { keep: true, status: 409 });
+                    const text = buf.toString("utf8");
+                    const taken = await npmRelease.registryVersions(JSON.parse(text).name, cfg.npm);
+                    release = npmRelease.bumpPackageJson(text, cfg.npm, taken);
+                    return { files: [{ repoPath: pkgPath, content: Buffer.from(release.text, "utf8") }], message: `${message} [${release.to}]` };
+                };
+                writeOpts.beforePush = (oid, exportDir) => npmRelease.publish(exportDir, cfg.npm, release);
+            }
             const repoResult = await withDeadline(client.writeFiles(
                 prepared.map((p) => ({ repoPath: p.meta.repoPath, content: p.buf })),
-                {
-                    message: body.message || `Update ${prepared.map((p) => p.meta.name).join(", ")} via SpriteForge (${user.name || user.email})`,
-                    authorName:  user.name  || cfg.authorName,
-                    authorEmail: user.email || cfg.authorEmail
-                }
-            ), "Commit");
+                writeOpts
+            ), "Commit", cfg.npm && cfg.npm.enabled ? cfg.npm.timeoutMs : undefined);
 
             // The repository now holds exactly what was pushed — mirror it in the cache.
             const now = new Date().toISOString();
@@ -359,6 +372,10 @@ function createMasterLibraryRouter(deps) {
             }
             if (!cache.fetchedAt) cache.fetchedAt = now;
             if (repoResult.changed) await refreshVersion();
+            // The version just published is the branch version now, even if the re-read above failed.
+            if (repoResult.published && (!cache.version || cache.version.version !== repoResult.published.version)) {
+                cache.version = { name: repoResult.published.name, version: repoResult.published.version, file: cfg.versionFile, commit: repoResult.commit || null };
+            }
 
             res.json({
                 success: true,
@@ -368,6 +385,7 @@ function createMasterLibraryRouter(deps) {
                 commit: repoResult.commit || null,
                 branch: cfg.branch,
                 commitMessage: repoResult.message,
+                release: repoResult.published || null,   // { name, version, from, registry, files, dryRun } when npm publish ran
                 pushError: null,
                 ...listing()
             });

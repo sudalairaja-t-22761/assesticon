@@ -467,9 +467,11 @@
           return;
         }
         _applyListing(res);
+        if (typeof SF.setLibraryVersion === 'function') SF.setLibraryVersion(res);
         var names = (res.stored || []).join(', ');
         if (res.pushed) {
-          SF.showToast('Saved ' + names + ' and pushed commit ' + _shortSha(res.commit) + ' to ' + res.branch);
+          SF.showToast('Saved ' + names + ' and pushed commit ' + _shortSha(res.commit) + ' to ' + res.branch +
+            (res.release ? ' · published ' + res.release.name + '@' + res.release.version + (res.release.dryRun ? ' (dry run)' : '') : ''));
         } else if (res.changed === false && !res.pushError) {
           SF.showToast('Saved ' + names + ' — repository already up to date');
         } else {

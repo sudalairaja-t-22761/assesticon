@@ -6,6 +6,10 @@
   'use strict';
 
   var state = SF.state;
+  // SVG / XLink namespace URIs, read from the browser's HTML parser (it puts <svg> and xlink:href in them).
+  var _nsProbe = document.createElement('div');
+  _nsProbe.innerHTML = '<svg><use xlink:href="#x"></use></svg>';
+  var SVG_NAMESPACE = _nsProbe.firstChild.namespaceURI;
   var pendingUploadIconName = '';
   var pendingSingleUpload = null;
   var multiUploadSelection = [];
@@ -550,7 +554,7 @@
     var previewAttrs = SF.buildPreviewAttrs(icon);
     var previewDefs = icon.defsContent ? '<defs>' + icon.defsContent + '</defs>' : '';
     var previewStyle = icon.styleContent ? '<style>' + icon.styleContent + '</style>' : '';
-    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' +
+    return '<svg xmlns="' + SVG_NAMESPACE + '" viewBox="' +
       icon.originX + ' ' + icon.originY + ' ' + icon.width + ' ' + icon.height +
       '" width="40" height="40"' + previewAttrs + '>' + previewDefs + previewStyle + icon.svgContent + '</svg>';
   }
@@ -560,7 +564,7 @@
     var defs = icon.defsContent ? '<defs>' + icon.defsContent + '</defs>' : '';
     var style = icon.styleContent ? '<style>' + icon.styleContent + '</style>' : '';
     return '<?xml version="1.0" encoding="utf-8"?>\n' +
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' +
+      '<svg xmlns="' + SVG_NAMESPACE + '" viewBox="' +
       icon.originX + ' ' + icon.originY + ' ' + icon.width + ' ' + icon.height +
       '" width="' + SF.formatDim(icon.width) + '" height="' + SF.formatDim(icon.height) + '"' + rootAttrs + '>' +
       defs + style + icon.svgContent + '</svg>';
@@ -741,7 +745,7 @@
 
     var svg =
       '<?xml version="1.0" encoding="utf-8"?>\n' +
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height + '" width="' + width + '" height="' + height + '">' +
+      '<svg xmlns="' + SVG_NAMESPACE + '" viewBox="0 0 ' + width + ' ' + height + '" width="' + width + '" height="' + height + '">' +
       (defsParts.length ? '<defs>' + defsParts.join('\n') + '</defs>' : '') +
       (styleParts.length ? '<style>' + styleParts.join('\n') + '</style>' : '') +
       bodyParts.join('\n') +
@@ -2163,11 +2167,13 @@
       SF.toggleLibrarySelection(iconId, $(this).is(':checked'));
     });
 
+    // Click an icon → preview panel on the right (selection stays on the checkbox).
     $(document).on('click', '.lib-select-card', function (e) {
       if ($(e.target).closest('.saved-folder-actions, .library-select-toggle').length) return;
       var iconId = $(this).data('iconId');
-      if (!iconId || typeof SF.toggleLibrarySelection !== 'function') return;
-      SF.toggleLibrarySelection(iconId);
+      if (!iconId) return;
+      if (typeof SF.openLibraryPreview === 'function') { SF.openLibraryPreview(iconId); return; }
+      if (typeof SF.toggleLibrarySelection === 'function') SF.toggleLibrarySelection(iconId);
     });
 
     $(document).on('click', '#libAddSelectedBtn', function () {

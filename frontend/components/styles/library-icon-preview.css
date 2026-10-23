@@ -1,0 +1,43 @@
+/* ============================================================
+   ICON LIBRARY — right-side icon preview (colours, preview, code)
+   ============================================================ */
+.lib-preview-panel { --right-panel-w: 320px; background: var(--bg-panel); }
+.lpp-inner { padding: 18px 18px 24px; display: flex; flex-direction: column; gap: 10px; }
+.lpp-head { display: flex; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--border-light); }
+.lpp-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lpp-close { border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); display: flex; }
+.lpp-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+.lpp-label { margin-top: 8px; font-size: 13px; font-weight: 500; letter-spacing: .3px; text-transform: uppercase; color: var(--text-primary); }
+
+.lpp-swatches {
+  display: flex; flex-wrap: wrap; gap: 10px; padding: 12px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-panel));
+}
+.lpp-swatch {
+  width: 22px; height: 22px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; background: var(--sw);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08); transition: transform .12s ease;
+}
+.lpp-swatch:hover { transform: scale(1.12); }
+.lpp-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lpp-swatch.is-active { box-shadow: 0 0 0 3px var(--bg-panel), 0 0 0 5px var(--sw); }
+.lpp-swatch[data-color="white"].is-active { box-shadow: 0 0 0 3px var(--bg-panel), 0 0 0 5px var(--text-tertiary); }
+
+.lpp-preview {
+  width: 200px; height: 200px; margin: 4px auto; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
+}
+.lpp-preview img { width: 40px; height: 40px; object-fit: contain; }
+.lpp-note { font-size: 12px; line-height: 1.4; color: var(--warning, #B26B00); background: color-mix(in srgb, #F18E0A 12%, var(--bg-panel)); border-radius: 8px; padding: 8px 10px; }
+.lpp-note.hidden { display: none; }
+
+.lpp-box {
+  position: relative; padding: 14px 16px; border: 1px solid var(--border-light); border-radius: 8px;
+  background: var(--bg-input); font-size: 13px; color: var(--text-primary); line-height: 1.45;
+}
+.lpp-code { padding-right: 40px; }
+.lpp-code code { font-family: inherit; white-space: pre-wrap; word-break: break-word; }
+.lpp-copy { position: absolute; top: 8px; right: 8px; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); display: flex; }
+.lpp-copy:hover { color: var(--accent); background: var(--bg-hover); }
+
+#libGrid .lib-card.lib-previewing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
