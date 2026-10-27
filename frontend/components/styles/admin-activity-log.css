@@ -1,0 +1,23 @@
+/* ============================================================
+   ACTIVITY LOG (admin) — sign-in / sign-out tracking
+   ============================================================ */
+.al-range { height: 30px; padding: 0 10px; font-size: 12px; color: var(--text-primary); background: var(--bg-input); border: 1px solid var(--border-light); border-radius: var(--radius-sm); }
+.al-stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.al-stat { min-width: 120px; padding: 12px 16px; border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-panel); font-size: 12px; color: var(--text-secondary); }
+.al-stat span { display: block; font-size: 22px; font-weight: 600; color: var(--text-primary); line-height: 1.2; }
+.al-heading { margin: 18px 0 8px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.al-table-wrap { overflow-x: auto; }
+.al-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.al-table th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; color: var(--text-tertiary); padding: 8px 10px; border-bottom: 1px solid var(--border-light); white-space: nowrap; }
+.al-table td { padding: 9px 10px; border-bottom: 1px solid var(--border-light); color: var(--text-primary); vertical-align: middle; }
+.al-table tbody tr:hover { background: var(--bg-hover); }
+.al-num { text-align: right; font-variant-numeric: tabular-nums; width: 80px; }
+.al-person { display: flex; flex-direction: column; min-width: 0; }
+.al-name { font-weight: 500; }
+.al-email, .al-muted { font-size: 12px; color: var(--text-tertiary); }
+.al-pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.al-pill-login { background: color-mix(in srgb, #12AA67 15%, transparent); color: #0d8a53; }
+.al-pill-logout { background: color-mix(in srgb, #616E88 15%, transparent); color: var(--text-secondary); }
+.al-empty { padding: 32px 12px; text-align: center; color: var(--text-tertiary); font-size: 13px; }
+.al-error { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--danger-bg); color: var(--danger); font-size: 13px; }
+.al-more { margin-top: 8px; }

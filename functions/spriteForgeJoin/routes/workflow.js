@@ -59,7 +59,7 @@ function parseApprover(v) {
 function createWorkflowRouter({ requireSession }) {
     const router = express.Router();
     // Mounted at /api, so gate only our own paths (other /api routes stay as they were).
-    router.use(["/me", "/users", "/org-users", "/members", "/roles", "/mail", "/icon-status", "/requests"], requireSession);
+    router.use(["/me", "/users", "/org-users", "/members", "/roles", "/mail", "/icon-status", "/requests", "/activity-log"], requireSession);
 
     const me = (req) => req.auth.session.user;
 
@@ -135,6 +135,12 @@ function createWorkflowRouter({ requireSession }) {
     }));
 
     // ── users + members (admin) ─────────────────────────────────────────────
+    // Admin Activity Log: sign-in / sign-out counts per user and the latest events. ?days=7|30|0(all) &limit=200
+    router.get("/activity-log", requireRole(["admin"]), wrap(async (req, res) => {
+        const days = Math.max(0, parseInt(req.query.days, 10) || 0);
+        res.json({ success: true, days, ...(await require("../lib/activity-log").summary(req, { days, limit: req.query.limit })) });
+    }));
+
     router.get("/users", requireRole(["admin"]), wrap(async (req, res) => {
         const db = store.forRequest(req);
         const [users, members] = await Promise.all([db.all("user_data"), db.all("members")]);

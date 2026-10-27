@@ -511,6 +511,9 @@ app.post("/api/auth/zoho/callback", async (req, res) => {
             refreshToken: tokenData.json.refresh_token || null
         });
 
+        // Admin Activity Log: one "login" event per successful sign-in (never blocks the sign-in).
+        await require("./lib/activity-log").record(req, "login", user);
+
         // Persist user profile on first login; deduplicate by userEmail
         let userDataStatus = "not_attempted";
         try {
@@ -583,8 +586,11 @@ app.get("/api/auth/session", (req, res) => {
 // ===================================
 // AUTH: Logout
 // ===================================
-app.post("/api/auth/logout", (req, res) => {
+app.post("/api/auth/logout", async (req, res) => {
     const sessionId = req.headers["x-session-id"];
+    // Admin Activity Log: count the sign-out of a valid session (expired sessions just end, nothing to record).
+    const current = getSession(req);
+    if (current) await require("./lib/activity-log").record(req, "logout", current.session.user);
     if (sessionId && typeof sessionId === "string") {
         avatarCache.delete(sessionId);
     }
@@ -1395,6 +1401,9 @@ app.post("/generate", wfUpload.array("files", 500), async (req, res) => {
 
         if (mode === "sprite") {
             const $ = cheerio.load(files[0].buffer.toString("utf8"), { xmlMode: true });
+            // Reuse the sprite's own SVG namespace for the single-icon files.
+            const svgNs  = $("svg").first().attr("xmlns");
+            const nsAttr = svgNs ? ` xmlns="${svgNs}"` : "";
             const elById = {};
             $("[id]").each((_, el) => { elById[$(el).attr("id")] = el; });
             $("symbol[id]").each(async (_, sym) => {
@@ -1408,7 +1417,7 @@ app.post("/generate", wfUpload.array("files", 500), async (req, res) => {
                 const vb   = $(sym).attr("viewBox") || "0 0 24 24";
                 const name = uniq(wfSanitizeName(rawId));
                 iconNames.push(name);
-                await fsAsync.writeFile(`${srcDir}/${name}.svg`, wfPrepSvg(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}">${$sym.html() || ""}</svg>`), "utf8");
+                await fsAsync.writeFile(`${srcDir}/${name}.svg`, wfPrepSvg(`<svg${nsAttr} viewBox="${vb}">${$sym.html() || ""}</svg>`), "utf8");
             });
             $("svg > path[id], svg > g[id]").each(async (_, el) => {
                 const rawId = $(el).attr("id");
@@ -1416,7 +1425,7 @@ app.post("/generate", wfUpload.array("files", 500), async (req, res) => {
                 const rootVb = $("svg").attr("viewBox") || `0 0 ${parseFloat($("svg").attr("width")) || 24} ${parseFloat($("svg").attr("height")) || 24}`;
                 const name   = uniq(wfSanitizeName(rawId));
                 iconNames.push(name);
-                await fsAsync.writeFile(`${srcDir}/${name}.svg`, wfPrepSvg(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${rootVb}">${$.html(el)}</svg>`), "utf8");
+                await fsAsync.writeFile(`${srcDir}/${name}.svg`, wfPrepSvg(`<svg${nsAttr} viewBox="${rootVb}">${$.html(el)}</svg>`), "utf8");
             });
         } else {
             for (const file of files) {
@@ -1879,7 +1888,7 @@ if (require.main === module) {
     const http = require('http');
     const PORT = process.env.PORT || 3001;
     http.createServer(app).listen(PORT, () => {
-        console.log(`[local] spriteForgeJoin running at http://localhost:${PORT}`);
+        console.log(`[local] spriteForgeJoin running on localhost port ${PORT}`);
         console.log(`[local] Loaded env  : ${
             (() => {
                 const fs        = require('fs');
