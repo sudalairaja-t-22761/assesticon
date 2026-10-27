@@ -115,6 +115,12 @@ function createMasterLibraryRouter(deps) {
                 cache.error = null;
                 return cache;
             } catch (e) {
+                // 401/403 from the git host = the server's token was refused, not a network problem.
+                if (/\b40[13]\b/.test(e.message || "")) {
+                    e.message = `The repository refused this server's token (${deps.tokenVar || "REPO_TOKEN"}). ` +
+                        `Create a new ZohoRepository personal access token with repo read/write access and set it in the function's .env. (${e.message})`;
+                    e.status = 503;
+                }
                 cache.error = e.message;
                 throw e;
             } finally {

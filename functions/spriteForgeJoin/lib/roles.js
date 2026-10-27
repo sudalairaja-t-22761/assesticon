@@ -135,11 +135,16 @@ async function syncRoleRows(req) {
     const adds = [];
     for (const key of Object.keys(BUILTIN)) if (!have.has(key)) adds.push({ role_key: key, role_name: BUILTIN[key].name, ...menuFields(startFor(key)) });
     for (const [key, l] of legacyByKey) if (!BUILTIN[key] && !have.has(key)) adds.push({ role_key: key, role_name: l.name || key, ...menuFields(startFor(key)) });
-    if (adds.length) { await db.insertMany("roles", adds); written += adds.length; }
+    if (adds.length) {
+        const cols = roleRows.length ? new Set(roleRows.flatMap((r) => Object.keys(r))) : null;
+        const rows = cols ? adds.map((a) => Object.fromEntries(Object.entries(a).filter(([k]) => !MENU_KEYS.includes(k) || cols.has(k)))) : adds;
+        await db.insertMany("roles", rows); written += rows.length;
+    }
 
     for (const [key, row] of have) {
         const start = startFor(key);
-        const blanks = MENU_KEYS.filter((m) => row[m] === undefined || row[m] === null || row[m] === "");
+        // A key missing from the row means the table has no such column yet (nothing to fill); null/"" means empty.
+        const blanks = MENU_KEYS.filter((m) => m in row && (row[m] === null || row[m] === undefined || row[m] === ""));
         if (!blanks.length) continue;
         await db.update("roles", row.ROWID, Object.fromEntries(blanks.map((m) => [m, start.includes(m)])));
         written++;
@@ -147,18 +152,50 @@ async function syncRoleRows(req) {
     return written;
 }
 
+/** Columns the `roles` table has (from its rows), or null when it has no rows yet. */
+async function roleColumns(db) {
+    const rows = await db.all("roles");
+    return rows.length ? new Set(rows.flatMap((r) => Object.keys(r))) : null;
+}
+
+const missingColumnsHint = (missing) =>
+    `The Catalyst Data Store table "roles" has no column ${missing.join(", ")}. Add ${missing.length > 1 ? "them" : "it"} as Boolean ` +
+    `(Data Store → roles → New Column) to save ${missing.length > 1 ? "those menus" : "that menu"}.`;
+
+/**
+ * Write role fields; if the table lacks a menu column that was added to MENUS later (e.g. asset_store), save the
+ * other fields instead of failing the whole save, and log which column to create. Throws when nothing is left to save.
+ */
+async function writeRoleFields(db, fields, write) {
+    try { return await write(fields); }
+    catch (e) {
+        let cols = null;
+        try { cols = await roleColumns(db); } catch (_) { /* table unreadable: report the original error */ }
+        const missing = cols ? MENU_KEYS.filter((m) => m in fields && !cols.has(m)) : [];
+        if (!missing.length) throw e;
+        console.warn("[roles] " + missingColumnsHint(missing));
+        const rest = { ...fields };
+        missing.forEach((m) => delete rest[m]);
+        if (!Object.keys(rest).length) throw Object.assign(new Error(missingColumnsHint(missing)), { status: 409 });
+        return write(rest);
+    }
+}
+
 /** Set one menu's true/false switch for a role — updates just that column of its row. */
 async function setRoleMenu(req, rowId, menuKey, allowed) {
-    await store.forRequest(req).update("roles", rowId, { [menuKey]: !!allowed });
+    const db = store.forRequest(req);
+    await writeRoleFields(db, { [menuKey]: !!allowed }, (f) => db.update("roles", rowId, f));
 }
 
 /** Set every menu of a role at once from a list of allowed keys. */
 async function setRoleMenus(req, rowId, list) {
-    await store.forRequest(req).update("roles", rowId, menuFields(menuList(list)));
+    const db = store.forRequest(req);
+    await writeRoleFields(db, menuFields(menuList(list)), (f) => db.update("roles", rowId, f));
 }
 
 async function createRole(req, { key, name, menus }) {
-    await store.forRequest(req).insert("roles", { role_key: key, role_name: name, ...menuFields(menuList(menus)) });
+    const db = store.forRequest(req);
+    await writeRoleFields(db, { role_key: key, role_name: name, ...menuFields(menuList(menus)) }, (f) => db.insert("roles", f));
 }
 
 async function renameRole(req, rowId, name) { await store.forRequest(req).update("roles", rowId, { role_name: name }); }

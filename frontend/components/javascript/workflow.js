@@ -192,9 +192,20 @@
     }).join(''));
   }
 
+  // Keep the status counts in step with the grid: the repo icons usually arrive after the statuses,
+  // so every grid render (initial load, sync, search, source filter) also refreshes the counts.
+  if (typeof SF.renderLibraryGrid === 'function' && !SF.renderLibraryGrid._vfCounts) {
+    var renderGrid = SF.renderLibraryGrid;
+    SF.renderLibraryGrid = function () {
+      var r = renderGrid.apply(this, arguments);
+      if ($('#libSourceFilter').length) renderStatusFilter();
+      return r;
+    };
+    SF.renderLibraryGrid._vfCounts = true;
+  }
+
   $(document).on('click', '[data-vf-filter]', function () {
     SF.libState.statusFilter = $(this).data('vf-filter');
-    renderStatusFilter();
     SF.renderLibraryGrid();
   });
 
