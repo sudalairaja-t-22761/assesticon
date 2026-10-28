@@ -1,10 +1,13 @@
 /**
  * SpriteForge - Icon verification workflow
  *
- * - Verification badges on Library icons (unverified / requested / mock verified / master verified)
+ * - Verification badges on Library icons (unverified / mock requested / mock verified / master requested / master verified),
+ *   found by comparing the UI library (Iconassest) with the mock branch and the master branch sprites
  * - Request Icon form (target sprite: utilicon = crmutil_icons, cssicon = svg_cssicons)
- * - Requests page: step progress, admin can assign Visual audit + UI audit approvers, reviewers approve/reject,
- *   admin pushes the approved icon into the chosen sprite of the main library
+ * - Two stages, each with a Visual audit then a UI audit:
+ *     unverified    → audits → the requester pushes to the mock branch   → mock verified
+ *     mock verified → audits → an admin approves + pushes to the master branch → master verified
+ * - Requests page: step progress, admin can assign Visual audit + UI audit approvers, reviewers approve/reject
  * - Members page (admin only): add members with a role and an approver type (None / Visual audit / UI audit)
  */
 (function (SF, $) {
@@ -12,9 +15,13 @@
 
   var TARGETS = { crmutil_icons: 'utilicon (crmutil_icons.svg)', svg_cssicons: 'cssicon (svg_cssicons.svg)' };
   var STATUS_LABEL = {
-    unverified: 'Unverified', requested: 'Verification requested',
-    mock_verified: 'Mock verified', master_verified: 'Master verified'
+    unverified: 'Unverified', requested: 'Mock requested', mock_verified: 'Mock verified',
+    master_requested: 'Master requested', master_verified: 'Master verified'
   };
+  // Request stage → the repository router that holds its branch (mock = REPO_BRANCH, master = MASTER_REPO_BRANCH).
+  var STAGE_API = { mock: 'api/master-library', master: 'api/master-branch' };
+  var BRANCH_LABEL = { mock: 'Mock branch', master: 'Master branch' };
+  function stageOf(r) { return r && r.stage === 'master' ? 'master' : 'mock'; }
   var ROLE_INFO = {
     designer: 'Designer — decides the menus this member can open (preset for design work). Approving requests is set separately under Approver.',
     ui: 'UI — decides the menus this member can open (preset for UI work). Approving requests is set separately under Approver.',
@@ -33,9 +40,11 @@
     return '<span class="vf-pill vf-pill-' + decision + '">' + STAGE[slot] + ' ' + decision + '</span>';
   }
   // Timeline action labels for stored actions like designer_approved.
+  var ACTION_LABEL = { requested: 'requested (mock)', requested_master: 'requested (master)', pushed: 'pushed',
+    pushed_mock: 'pushed to mock', pushed_master: 'approved + pushed to master', admin_declined: 'declined by admin' };
   function actionLabel(action) {
     var m = /^(designer|ui)_(approved|rejected)$/.exec(action);
-    return m ? STAGE[m[1]] + ' ' + m[2] : action.replace(/_/g, ' ');
+    return m ? STAGE[m[1]] + ' ' + m[2] : ACTION_LABEL[action] || action.replace(/_/g, ' ');
   }
   // Approver type of a member: designer | ui | '' (none). Older rows without the field used their Designer/UI role.
   function approverOf(m) {
@@ -58,7 +67,7 @@
     } catch (e) {}
   })();
 
-  var wf = SF.wf = { role: null, email: null, statuses: {}, requests: [], openId: null, masterIds: null, members: [], roles: [], menuCatalog: [], menus: null };
+  var wf = SF.wf = { role: null, email: null, statuses: {}, requests: [], openId: null, cmp: {}, branches: {}, members: [], roles: [], menuCatalog: [], menus: null };
 
   // sidebar menu key → button selector, and which menu(s) open each page
   var MENU_SELECTORS = {
@@ -134,44 +143,126 @@
 
   function loadStatuses() {
     var mine = api('GET', 'icon-status').then(function (r) {
-      wf.statuses = {};
-      (r.statuses || []).forEach(function (s) { wf.statuses[s.sprite + ':' + s.symbolId] = s.status; });
+      wf.statuses = {}; wf.drawings = {};
+      (r.statuses || []).forEach(function (s) { wf.statuses[s.sprite + ':' + s.symbolId] = s.status; wf.drawings[s.sprite + ':' + s.symbolId] = s.drawing || ''; });
     }).catch(function () { /* signed out / table missing: icons just show as unverified */ });
-    return Promise.all([mine, loadMasterIds()]).then(function () {
+    return Promise.all([mine, loadRepoIds()]).then(function () {
       renderStatusFilter();
       if (typeof SF.renderLibraryGrid === 'function' && $('#libGrid').length) SF.renderLibraryGrid();
     });
   }
 
-  // Compare the two repos: an icon of the icon store whose symbol already exists in a main-library
-  // sprite (CRM_UI_LIBRARY) is master verified, whatever the request records say.
-  function normId(id) { return String(id || '').toLowerCase().replace(/__s$/, ''); }
+  // Compare the UI library (Iconassest) with both CRM_UI_LIBRARY branches by NAME and DRAWING (icon-compare.js):
+  // the same drawing on master → master verified, on mock → mock verified, whatever the request records say.
+  // A name that exists on a branch with a different drawing does not count: the UI library icon changed.
+  var C = SF.iconCompare;
+  function normId(id) { return C.normId(id); }
+  var SPRITE_FILES = ['crmutil_icons', 'svg_cssicons'];
+  STAGE_API.ui = 'api/icon-library';
+  BRANCH_LABEL.ui = 'UI library';
 
-  function loadMasterIds() {
-    if (wf.masterIds || typeof SF.fetchMasterLibraryFile !== 'function') return Promise.resolve();
-    var files = ['crmutil_icons.svg', 'svg_cssicons.svg'];
-    return Promise.all(files.map(function (f) { return SF.fetchMasterLibraryFile(f).catch(function () { return null; }); })).then(function (texts) {
-      if (texts.every(function (t) { return t === null; })) return; // not signed in / repo unreachable: retry next time
-      var ids = {};
-      texts.forEach(function (t) {
-        var re = /<symbol\b[^>]*\bid\s*=\s*["']([^"']+)["']/g, m;
-        while (t && (m = re.exec(t)) !== null) ids[normId(m[1])] = true;
+  function fetchRepoText(stage, name) {
+    return new Promise(function (resolve, reject) {
+      $.ajax({
+        url: SF.masterLibraryUrl(STAGE_API[stage] + '/file?name=' + encodeURIComponent(name)), type: 'GET', dataType: 'text',
+        headers: SF.masterLibraryAuthHeaders(), timeout: 60000,
+        success: function (t) { resolve(t || ''); },
+        error: function (xhr) {
+          var j = null; try { j = xhr.responseJSON || JSON.parse(xhr.responseText || ''); } catch (e) {}
+          reject(new Error((j && j.message) || 'Could not load ' + name + ' from the ' + BRANCH_LABEL[stage].toLowerCase()));
+        }
       });
-      wf.masterIds = ids;
     });
   }
 
+  // Index of one branch's sprites; null when none could be read (not signed in / repo unreachable: retry next time).
+  function loadBranch(stage) {
+    if (!SF.masterLibraryUrl) return Promise.resolve(null);
+    return Promise.all(SPRITE_FILES.map(function (f) {
+      return fetchRepoText(stage, f + '.svg').then(function (text) { return { sprite: f, text: text }; }, function () { return null; });
+    })).then(function (texts) { return texts.some(Boolean) ? C.branchIndex(texts) : null; });
+  }
+  // The UI library sprite(s): normalized symbol id → drawing key.
+  function loadUiDrawings() {
+    var files = ((SF.repoLib && SF.repoLib.sprites) || []).map(function (s) { return s.file || s.name; }).filter(Boolean);
+    if (!files.length) files = ['crmutil_icons.svg'];
+    return Promise.all(files.map(function (f) { return fetchRepoText('ui', String(f).split('/').pop()).catch(function () { return null; }); })).then(function (texts) {
+      if (!texts.some(Boolean)) return null;
+      var keys = {};
+      texts.forEach(function (t) { var k = C.spriteIcons(t); Object.keys(k).forEach(function (id) { keys[id] = k[id]; }); });
+      return keys;
+    });
+  }
+
+  function loadRepoIds() {
+    var jobs = [];
+    if (!wf.cmp.mock) jobs.push(loadBranch('mock').then(function (x) { wf.cmp.mock = x; }));
+    if (!wf.cmp.master) jobs.push(loadBranch('master').then(function (x) { wf.cmp.master = x; }));
+    if (!wf.cmp.ui) jobs.push(loadUiDrawings().then(function (x) { wf.cmp.ui = x; }));
+    if (!wf.branches.mock) {
+      ['mock', 'master'].forEach(function (st) {
+        jobs.push(Promise.resolve($.getJSON(SF.masterLibraryUrl(STAGE_API[st] + '/config'))).then(function (c) { wf.branches[st] = c.branch || ''; }, function () {}));
+      });
+    }
+    return Promise.all(jobs);
+  }
+  // After a push (or a UI library sync) the sprites changed: compare again.
+  function resetRepoIds() { wf.cmp = {}; }
+  SF.wfResetCompare = resetRepoIds;
+
+  // How a UI library icon compares with one branch: 'same' | 'alias' (same drawing, other name) | 'changed' | ''.
+  function compareWith(icon, stage) {
+    var key = wf.cmp.ui ? wf.cmp.ui[normId(icon.symbolId)] : '';
+    return C.match(icon.symbolId, key, wf.cmp[stage]);
+  }
+  function onBranch(icon, stage) { var m = compareWith(icon, stage); return m === 'same' || m === 'alias'; }
+  // The name the matching drawing has on that branch (differs for an alias).
+  function nameOn(icon, stage) {
+    var b = wf.cmp[stage], m = compareWith(icon, stage), id = normId(icon.symbolId);
+    if (!b) return '';
+    if (m === 'alias') { var k = wf.cmp.ui && wf.cmp.ui[id]; return b.realId[b.byKey[k]] || b.byKey[k] || ''; }
+    return b.realId[id] || '';
+  }
+
+  // Fingerprint of the icon's current UI library drawing ('' until the UI library sprite is read).
+  function uiFingerprint(icon) { return wf.cmp.ui ? C.fingerprint(wf.cmp.ui[normId(icon.symbolId)]) : ''; }
+
   SF.wfStatusOf = function (icon) {
-    if (wf.masterIds && wf.masterIds[normId(icon.symbolId)]) return 'master_verified';
-    var st = wf.statuses[icon.sprite + ':' + icon.symbolId] || 'unverified';
-    return st === 'master_verified' ? 'mock_verified' : st; // pushed but not (yet) in the repo sprite
+    var k = icon.sprite + ':' + icon.symbolId, st = wf.statuses[k] || 'unverified';
+    var compared = !!(wf.cmp.mock && wf.cmp.master);
+    // A push made by this tool records the drawing it pushed: still valid while the UI library drawing is unchanged
+    // (the copy in the branch sprite is re-placed/scaled, so its markup need not match the UI library's).
+    var pushed = !!(wf.drawings && wf.drawings[k]) && wf.drawings[k] === uiFingerprint(icon);
+    if (onBranch(icon, 'master') || (st === 'master_verified' && pushed)) return 'master_verified';
+    if (st === 'requested' || st === 'master_requested') return st;
+    if (onBranch(icon, 'mock') || (st === 'mock_verified' && pushed)) return 'mock_verified';
+    if (compared) return 'unverified'; // not on either branch with this drawing (new, or changed in the UI library)
+    return st === 'master_verified' ? 'mock_verified' : st;
   };
+  // Which mock sprite already holds this icon's drawing ('' when unknown).
+  function mockSpriteOf(icon) {
+    var b = wf.cmp.mock, id = normId(icon.symbolId);
+    if (!b || !onBranch(icon, 'mock')) return '';
+    if (compareWith(icon, 'mock') === 'alias') { var k = wf.cmp.ui && wf.cmp.ui[id]; return b.sprite[b.byKey[k]] || ''; }
+    return b.sprite[id] || '';
+  }
+  // One line per branch for tooltips: "Master: different drawing under this name · Mock: same drawing as zcicn-x".
+  function compareText(icon) {
+    if (!wf.cmp.mock && !wf.cmp.master) return '';
+    return ['master', 'mock'].map(function (stage) {
+      var m = compareWith(icon, stage);
+      return BRANCH_LABEL[stage].replace(' branch', '') + ': ' + (m === 'same' ? 'same icon' : m === 'alias' ? 'same drawing as ' + nameOn(icon, stage)
+        : m === 'changed' ? 'different drawing under this name' : 'not there');
+    }).join(' · ');
+  }
 
   SF.wfBadgeHtml = function (icon) {
     var st = SF.wfStatusOf(icon);
-    var tip = st === 'unverified' ? 'Not verified yet — click to request verification' : STATUS_LABEL[st];
+    var tip = (st === 'unverified' ? 'Not verified yet — click to request the mock verification'
+      : st === 'mock_verified' ? 'On the mock branch — click to request the push to master' : STATUS_LABEL[st]) +
+      (compareText(icon) ? '\n' + compareText(icon) : '');
     return '<span class="vf-badge vf-badge-' + st + '" data-vf-symbol="' + esc(icon.symbolId) + '" data-vf-sprite="' + esc(icon.sprite) +
-      '" title="' + esc(tip) + '">' + (st === 'unverified' ? 'Unverified' : TICK + ' ' + STATUS_LABEL[st].replace('Verification ', '')) + '</span>';
+      '" title="' + esc(tip) + '">' + (st === 'unverified' ? 'Unverified' : TICK + ' ' + STATUS_LABEL[st]) + '</span>';
   };
 
   function renderStatusFilter() {
@@ -204,13 +295,24 @@
     SF.renderLibraryGrid._vfCounts = true;
   }
 
+  // Sync from repo (force) re-reads the UI library and both branches, so compare them again.
+  if (typeof SF.loadRepoLibraryIcons === 'function' && !SF.loadRepoLibraryIcons._vfCompare) {
+    var loadRepoIcons = SF.loadRepoLibraryIcons;
+    SF.loadRepoLibraryIcons = function (force) {
+      var job = loadRepoIcons.apply(this, arguments);
+      if (force) Promise.resolve(job).then(function () { resetRepoIds(); return loadStatuses(); }).catch(function () {});
+      return job;
+    };
+    SF.loadRepoLibraryIcons._vfCompare = true;
+  }
+
   $(document).on('click', '[data-vf-filter]', function () {
     SF.libState.statusFilter = $(this).data('vf-filter');
     SF.renderLibraryGrid();
   });
 
-  // Clicking an "Unverified" badge starts a request for that icon.
-  $(document).on('click', '.vf-badge-unverified', function (e) {
+  // Clicking an "Unverified" badge starts the mock request, a "Mock verified" badge the master request.
+  $(document).on('click', '.vf-badge-unverified, .vf-badge-mock_verified', function (e) {
     e.stopPropagation();
     wf.prefill = { symbolId: $(this).data('vf-symbol'), sprite: $(this).data('vf-sprite') };
     SF.switchPage('requesticon');
@@ -231,16 +333,18 @@
     }).join('');
     $body.html(
       '<div class="vf-form">' +
-        '<label>Icon (from the icon store)<select id="wfReqIcon">' + (opts || '<option value="">Loading icons…</option>') + '</select></label>' +
+        '<label>Icon (from the UI library)<select id="wfReqIcon">' + (opts || '<option value="">Loading icons…</option>') + '</select></label>' +
         '<img class="vf-form-preview hidden" id="wfReqPreview" alt="">' +
-        '<label>Move to main library sprite<select id="wfReqTarget">' +
+        '<div class="vf-flow" id="wfReqFlow"></div>' +
+        '<label>Sprite<select id="wfReqTarget">' +
           Object.keys(TARGETS).map(function (k) { return '<option value="' + k + '">' + esc(TARGETS[k]) + '</option>'; }).join('') +
         '</select></label>' +
         '<label>Note<textarea id="wfReqNote" rows="3" maxlength="1000" placeholder="Where will it be used?"></textarea></label>' +
         '<div><button class="btn btn-primary btn-sm" id="wfReqSubmit" type="button">Request verification</button></div>' +
-        '<div class="vf-msg">Visual audit and UI audit both have to approve. Once both approve, an admin pushes it to the main library.</div>' +
+        '<div class="vf-msg" id="wfReqHelp"></div>' +
       '</div>');
     updateRequestPreview();
+    if (!wf.cmp.mock || !wf.cmp.master || !wf.cmp.ui) loadRepoIds().then(updateRequestPreview);
     if (!icons.length && typeof SF.loadRepoLibraryIcons === 'function') {
       Promise.resolve(SF.loadRepoLibraryIcons(false)).then(function () { if (repoIcons().length) renderRequestForm(); });
     }
@@ -251,12 +355,34 @@
     return repoIcons().filter(function (ic) { return ic.id === id; })[0] || null;
   }
 
+  // Which request the selected icon can get: 'mock' (unverified), 'master' (mock verified) or '' (already in a stage / done).
+  function requestStageOf(ic) {
+    var st = ic ? SF.wfStatusOf(ic) : '';
+    return st === 'unverified' ? 'mock' : st === 'mock_verified' ? 'master' : '';
+  }
+  function branchName(stage) { return BRANCH_LABEL[stage] + (wf.branches[stage] ? ' (' + wf.branches[stage] + ')' : ''); }
+
   function updateRequestPreview() {
     var ic = selectedRepoIcon();
     var $p = $('#wfReqPreview');
     if (ic && ic.svgContent) {
       $p.attr('src', 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(ic.svgContent)).removeClass('hidden');
     } else { $p.addClass('hidden'); }
+    var st = ic ? SF.wfStatusOf(ic) : '', stage = requestStageOf(ic), onMock = ic && mockSpriteOf(ic);
+    var steps = stage === 'master'
+      ? ['Mock verified', 'Visual audit', 'UI audit', 'Admin approves', branchName('master')]
+      : ['Unverified', 'Visual audit', 'UI audit', 'You push', branchName('mock')];
+    $('#wfReqFlow').html(ic ? '<span class="vf-pill-tag vf-stage-' + (stage || 'done') + '">' + esc(STATUS_LABEL[st] || st) + '</span> ' +
+      (stage ? steps.map(esc).join(' <span class="vf-arrow">→</span> ') : '<span class="vf-msg">' + esc(
+        st === 'master_verified' ? 'Already on the master branch — nothing to request.'
+        : 'This icon already has an open request — follow it on the Icon Requests page.') + '</span>') : '');
+    // A master request goes into the sprite the icon already has on the mock branch.
+    if (stage === 'master' && onMock) $('#wfReqTarget').val(onMock);
+    $('#wfReqTarget').prop('disabled', stage === 'master' && !!onMock);
+    $('#wfReqSubmit').prop('disabled', !stage).text(stage === 'master' ? 'Request push to master' : 'Request mock verification');
+    $('#wfReqHelp').text(stage === 'master'
+      ? 'The Visual audit and the UI audit check it again; then only an admin can approve and push it to the master branch.'
+      : 'The Visual audit and then the UI audit have to approve; then you push it to the mock branch from the request.');
   }
 
   $(document).on('change', '#wfReqIcon', updateRequestPreview);
@@ -264,9 +390,12 @@
   $(document).on('click', '#wfReqSubmit', function () {
     var ic = selectedRepoIcon();
     if (!ic) { SF.showToast('Pick an icon first'); return; }
+    var stage = requestStageOf(ic);
+    if (!stage) { SF.showToast('This icon cannot be requested now'); return; }
     var $btn = $(this).prop('disabled', true);
     api('POST', 'requests', {
-      symbolId: ic.symbolId, sprite: ic.sprite, iconName: ic.name, svg: ic.svgContent,
+      symbolId: ic.symbolId, sprite: ic.sprite, iconName: ic.name, svg: ic.svgContent, stage: stage,
+      inMock: onBranch(ic, 'mock'), inMaster: onBranch(ic, 'master'),
       targetSprite: $('#wfReqTarget').val(), note: $('#wfReqNote').val()
     }).then(function (res) {
       var n = res.notified || {};
@@ -277,7 +406,7 @@
         : 'Request submitted — no Visual audit approvers yet, ask an admin to add them');
       return loadStatuses();
     }).then(function () { SF.switchPage('wfrequests'); })
-      .catch(fail).then(function () { $btn.prop('disabled', false); });
+      .catch(fail).then(function () { $btn.prop('disabled', false); updateRequestPreview(); });
   });
 
   // ── Requests page ────────────────────────────────────────────────────────
@@ -294,6 +423,13 @@
   }
 
   function pill(status) { return '<span class="vf-pill vf-pill-' + status + '">' + esc(status) + '</span>'; }
+  // Request status in words: an audited request still waits for its push (mock: requester, master: admin).
+  function statusPill(r) {
+    if (r.status === 'approved') return '<span class="vf-pill vf-pill-pending">' + (stageOf(r) === 'master' ? 'waiting for admin approval' : 'audits passed · push to mock') + '</span>';
+    if (r.status === 'pushed') return '<span class="vf-pill vf-pill-pushed">' + (stageOf(r) === 'master' ? 'on master' : 'on mock') + '</span>';
+    return pill(r.status);
+  }
+  function stageTag(r) { var st = stageOf(r); return '<span class="vf-pill-tag vf-stage-' + st + '">' + (st === 'master' ? 'Master' : 'Mock') + '</span>'; }
   function dataUri(svg) { return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg || ''); }
 
   function loadRequests() {
@@ -380,14 +516,14 @@
 
   function renderRequestsList() {
     if (!wf.requests.length) { $('#wfRequestsList').html('<div class="vf-empty">No requests yet.</div>'); return; }
-    $('#wfRequestsList').html('<table class="vf-table"><thead><tr><th>Icon</th><th>Target</th><th>Requested by</th><th>Visual audit</th><th>UI audit</th><th>Status</th><th></th></tr></thead><tbody>' +
+    $('#wfRequestsList').html('<table class="vf-table"><thead><tr><th>Icon</th><th>Stage</th><th>Target</th><th>Requested by</th><th>Visual audit</th><th>UI audit</th><th>Status</th><th></th></tr></thead><tbody>' +
       wf.requests.map(function (r) {
         return '<tr class="vf-row" data-vf-req="' + esc(r.ROWID) + '">' +
-          '<td>' + esc(r.iconName) + '</td><td>' + esc(r.targetSprite === 'svg_cssicons' ? 'cssicon' : 'utilicon') + '</td>' +
+          '<td>' + esc(r.iconName) + '</td><td>' + stageTag(r) + '</td><td>' + esc(r.targetSprite === 'svg_cssicons' ? 'cssicon' : 'utilicon') + '</td>' +
           '<td>' + esc(r.requestedByName || r.requestedBy) + '</td>' +
           '<td>' + reviewerCell(r.assignedDesigner, r.designerDecision, r.designerBy, r.notifiedDesigners, r.status, 'designer') + '</td>' +
           '<td>' + reviewerCell(r.assignedUI, r.uiDecision, r.uiBy, r.notifiedUI, r.status, 'ui', r.designerDecision !== 'approved') + '</td>' +
-          '<td>' + pill(r.status) + mailTag(r) + '</td>' +
+          '<td>' + statusPill(r) + mailTag(r) + '</td>' +
           '<td class="vf-row-actions">' + (canDelete(r) ? '<button class="btn btn-ghost btn-sm vf-pill" data-vf-req-del="' + esc(r.ROWID) + '" style="color:var(--danger)">Delete</button>' : '') + '</td></tr>';
       }).join('') + '</tbody></table>');
   }
@@ -396,13 +532,14 @@
 
   function stepsHtml(r) {
     var rej = function (d) { return d === 'rejected'; };
+    var master = stageOf(r) === 'master', declined = master && r.status === 'rejected' && !rej(r.designerDecision) && !rej(r.uiDecision);
     var steps = [
-      { label: 'Requested', cls: 'done' },
+      { label: master ? 'Mock verified · master requested' : 'Unverified · requested', cls: 'done' },
       { label: 'Visual audit', cls: r.designerDecision === 'approved' ? 'done' : rej(r.designerDecision) ? 'rejected' : 'current' },
-      { label: 'UI audit', cls: r.uiDecision === 'approved' ? 'done' : rej(r.uiDecision) ? 'rejected' : (r.designerDecision === 'approved' ? 'current' : '') },
-      { label: 'Mock verified', cls: (r.status === 'approved' || r.status === 'pushed') ? 'done' : '' },
-      { label: 'Pushed to library', cls: r.status === 'pushed' ? 'done' : (r.status === 'approved' ? 'current' : '') }
+      { label: 'UI audit', cls: r.uiDecision === 'approved' ? 'done' : rej(r.uiDecision) ? 'rejected' : (r.designerDecision === 'approved' ? 'current' : '') }
     ];
+    if (master) steps.push({ label: 'Admin approval', cls: r.status === 'pushed' ? 'done' : declined ? 'rejected' : (r.status === 'approved' ? 'current' : '') });
+    steps.push({ label: master ? 'Pushed to master' : 'Pushed to mock', cls: r.status === 'pushed' ? 'done' : (!master && r.status === 'approved' ? 'current' : '') });
     return '<div class="vf-steps">' + steps.map(function (s) { return '<div class="vf-step ' + s.cls + '">' + s.label + '</div>'; }).join('') + '</div>';
   }
 
@@ -428,12 +565,20 @@
       if (canDelete(r)) {
         actions += '<button class="btn btn-ghost btn-sm vf-pill" data-vf-req-del="' + esc(r.ROWID) + '" type="button" style="color:var(--danger);margin-left:auto">Delete request</button>';
       }
-      if (wf.role === 'admin' && r.status === 'approved') {
-        actions += '<button class="btn btn-primary btn-sm" id="wfPushBtn" type="button">Push to ' + esc(TARGETS[r.targetSprite] || r.targetSprite) + '</button>';
+      var target = esc(TARGETS[r.targetSprite] || r.targetSprite);
+      if (res.canPush === 'mock') {
+        actions += '<button class="btn btn-primary btn-sm" id="wfPushBtn" type="button">Push to mock · ' + target + '</button>';
+      } else if (res.canPush === 'master') {
+        actions += '<input id="wfReviewNote" type="text" placeholder="Note (optional)">' +
+          '<button class="btn btn-primary btn-sm" id="wfPushBtn" type="button">Approve &amp; push to master · ' + target + '</button>' +
+          '<button class="btn btn-ghost btn-sm" id="wfDeclineBtn" type="button" style="color:var(--danger)">Decline</button>';
+      } else if (r.status === 'approved') {
+        actions += '<span class="vf-msg">' + (stageOf(r) === 'master' ? 'Both audits passed — waiting for an admin to approve and push it to the master branch.'
+          : 'Both audits passed — waiting for ' + esc(r.requestedByName || r.requestedBy) + ' to push it to the mock branch.') + '</span>';
       }
       $('#wfRequestDetail').html('<div class="vf-detail">' +
-        '<div class="vf-detail-head"><img src="' + dataUri(r.svg) + '" alt=""><div><b>' + esc(r.iconName) + '</b> ' + pill(r.status) +
-          '<div class="vf-msg">' + 'target: ' + esc(TARGETS[r.targetSprite] || r.targetSprite) +
+        '<div class="vf-detail-head"><img src="' + dataUri(r.svg) + '" alt=""><div><b>' + esc(r.iconName) + '</b> ' + stageTag(r) + ' ' + statusPill(r) +
+          '<div class="vf-msg">' + 'to: ' + esc(branchName(stageOf(r))) + ' · ' + esc(TARGETS[r.targetSprite] || r.targetSprite) +
           ' · by ' + esc(r.requestedBy) + (r.note ? '<br>' + esc(r.note) : '') + '</div></div></div>' +
         stepsHtml(r) +
         (actions ? '<div class="vf-actions" data-vf-id="' + esc(r.ROWID) + '">' + actions + '</div>' : '') +
@@ -516,24 +661,42 @@
       }).catch(fail);
   });
 
-  // Push: add the single icon to the chosen sprite of the main library repo, then record it.
+  // Push: add the single icon to the chosen sprite of the request's branch (mock or master), then record it.
   $(document).on('click', '#wfPushBtn', function () {
-    var r = wf.open, $btn = $(this).prop('disabled', true);
-    var file = r.targetSprite + '.svg', pushedVersion = null;
+    var r = wf.open, stage = stageOf(r), $btn = $(this).prop('disabled', true);
+    var file = r.targetSprite + '.svg', pushedVersion = null, alreadyThere = false;
     var done = function () { $btn.prop('disabled', false); };
-    SF.showToast('Adding ' + r.iconName + ' to ' + file + '…');
-    SF.fetchMasterLibraryFile(file).then(function (text) {
-      var res = SF.addIconsToSpriteText(text, [{ name: r.iconName, text: r.svg }]);
-      if (!res.added.length) {
-        var why = res.skipped.length ? res.skipped[0].reason : 'nothing to add';
-        if (why !== 'already in the sprite') throw new Error('Could not add icon: ' + why);
-        return { alreadyThere: true };
+    var icon = { symbolId: r.symbolId, sprite: r.sprite }, drawing = '', replaceId = '';
+    // Compare first: same drawing already there → just record it; same name with another drawing → replace that icon.
+    loadRepoIds().then(function () {
+      var b = wf.cmp[stage], m = compareWith(icon, stage);
+      drawing = uiFingerprint(icon);
+      if (m === 'same' || m === 'alias') return { alreadyThere: true, as: nameOn(icon, stage) };
+      if (m === 'changed') { replaceId = b.realId[normId(r.symbolId)]; file = (b.sprite[normId(r.symbolId)] || r.targetSprite) + '.svg'; }
+      var what = (replaceId ? 'Replace the old drawing of ' + replaceId + ' in ' : 'Add "' + r.iconName + '" to ') + file + ' on ' + branchName(stage) + '?';
+      if ((stage === 'master' || replaceId) && !window.confirm((stage === 'master' ? 'Approve and push to master. ' : '') + what +
+        ' This also publishes a new npm version.')) throw Object.assign(new Error('cancelled'), { cancelled: true });
+      SF.showToast((replaceId ? 'Replacing ' + replaceId + ' in ' : 'Adding ' + r.iconName + ' to ') + file + ' on the ' + BRANCH_LABEL[stage].toLowerCase() + '…');
+      return fetchRepoText(stage, file);
+    }).then(function (text) {
+      if (text && text.alreadyThere) return text;
+      var res;
+      if (replaceId) {
+        res = SF.replaceIconInSpriteText(text, replaceId, { name: r.iconName, text: r.svg });
+        if (res.error) throw new Error('Could not replace icon: ' + res.error);
+      } else {
+        res = SF.addIconsToSpriteText(text, [{ name: r.iconName, text: r.svg }]);
+        if (!res.added.length) {
+          var why = res.skipped.length ? res.skipped[0].reason : 'nothing to add';
+          if (why !== 'already in the sprite') throw new Error('Could not add icon: ' + why);
+          return { alreadyThere: true };
+        }
       }
       return new Promise(function (resolve, reject) {
         $.ajax({
-          url: SF.masterLibraryUrl('api/master-library/save'), type: 'POST', dataType: 'json',
+          url: SF.masterLibraryUrl(STAGE_API[stage] + '/save'), type: 'POST', dataType: 'json',
           headers: SF.masterLibraryAuthHeaders(), contentType: 'application/json',
-          data: JSON.stringify({ files: [{ name: file, content: res.svg }], message: 'Add ' + r.iconName + ' to ' + file + ' (verified) via SpriteForge' }),
+          data: JSON.stringify({ files: [{ name: file, content: res.svg }], message: (replaceId ? 'Update ' + replaceId + ' in ' : 'Add ' + r.iconName + ' to ') + file + ' (' + stage + ' verified) via SpriteForge' }),
           success: function (out) {
             if (!out || out.success === false || out.pushError) reject(new Error((out && (out.pushError || out.message)) || 'Push failed'));
             else resolve(out);
@@ -542,13 +705,29 @@
         });
       });
     }).then(function (out) {
-      if (out && typeof SF.setLibraryVersion === 'function') SF.setLibraryVersion(out);
+      // The Library version bar shows both branches: update the one just published.
+      if (out && !out.alreadyThere && typeof SF.setLibraryVersion === 'function') SF.setLibraryVersion(out, stage);
       pushedVersion = out && out.release ? out.release.version : null;
-      return api('POST', 'requests/' + r.ROWID + '/push', { commitSha: (out && out.commit) || '' });
-    }).then(function () {
-      SF.showToast('Pushed to ' + file + (pushedVersion ? ' · published ' + pushedVersion : ''));
+      alreadyThere = !!(out && out.alreadyThere);
+      return api('POST', 'requests/' + r.ROWID + '/push', { commitSha: (out && out.commit) || '', version: pushedVersion || '', alreadyThere: alreadyThere, drawing: drawing })
+        .then(function () { return out; });
+    }).then(function (out) {
+      var on = ' on the ' + BRANCH_LABEL[stage].toLowerCase();
+      SF.showToast((alreadyThere ? 'The same icon is already' + on + (out && out.as && normId(out.as) !== normId(r.symbolId) ? ' as ' + out.as : '') + ' — recorded'
+        : (replaceId ? 'Replaced ' + replaceId + ' in ' : 'Pushed to ') + file + on) + (pushedVersion ? ' · published ' + pushedVersion : ''));
+      resetRepoIds();
       return Promise.all([loadRequests(), loadStatuses()]);
-    }).catch(fail).then(done);
+    }).catch(function (e) { if (!e || !e.cancelled) fail(e); }).then(done);
+  });
+
+  // Admin turns down an audited master request: the icon stays mock verified.
+  $(document).on('click', '#wfDeclineBtn', function () {
+    var r = wf.open;
+    if (!window.confirm('Decline the master push of "' + r.iconName + '"? It stays mock verified.')) return;
+    api('POST', 'requests/' + r.ROWID + '/decline', { note: $('#wfReviewNote').val() }).then(function () {
+      SF.showToast('Declined — ' + r.iconName + ' stays mock verified');
+      return Promise.all([loadRequests(), loadStatuses()]);
+    }).catch(fail);
   });
 
   // ── Members page (admin): Member / Role / Added On / Access Expires + "Add Member" dialog ──

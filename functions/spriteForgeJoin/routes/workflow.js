@@ -15,7 +15,8 @@
  *                                         approverType: "none" (default) | "designer" | "ui"  — who may be assigned to review
  *   DELETE /api/members/:id                                                                     [admin]
  *   GET    /api/icon-status             → [{ symbolId, sprite, status }]
- *   POST   /api/requests                → { symbolId, iconName, svg, targetSprite, note }; the Visual audit approvers are mailed first
+ *   POST   /api/requests                → { symbolId, iconName, svg, targetSprite, note, stage?, inMock? }; the Visual audit approvers are mailed first
+ *                                         stage "mock" (default): an unverified icon; stage "master": a mock verified icon
  *   GET    /api/requests                → admins see all; others see requested-by-me + assigned-to-me
  *   GET    /api/requests/:id            → request + event timeline
  *   POST   /api/requests/:id/assign     → { designer?, ui? } optional: narrow a review to one approver (who is mailed) [admin]
@@ -23,10 +24,15 @@
  *   POST   /api/mail/test               → send a test mail to the signed-in admin; reports where it ran + the exact error [admin]
  *   POST   /api/requests/:id/resend     → mail the approvers of every still-open review again          [admin]
  *   DELETE /api/requests/:id            → admin: any request; requester: own pending/rejected request
- *   POST   /api/requests/:id/push       → { commitSha? }  mark pushed to the main library       [admin]
+ *   POST   /api/requests/:id/push       → { commitSha? }  record the push   [mock: requester or admin · master: admin]
+ *   POST   /api/requests/:id/decline    → { note }  admin turns down an audited master request         [admin]
  *
- * Icon status: absent = unverified; requested → mock_verified (both teams approved) → master_verified.
- * The sprite write itself is done by the client through /api/master-library/save; /push records it.
+ * Flow (UI library = Iconassest, mock = REPO_BRANCH, master = MASTER_REPO_BRANCH):
+ *   unverified ─request─▶ requested ─Visual + UI audit─▶ requester pushes to mock ─▶ mock_verified
+ *   mock_verified ─request─▶ master_requested ─Visual + UI audit─▶ admin approves + pushes to master ─▶ master_verified
+ * A rejection (or a deleted request) puts the icon back where that stage started (unverified / mock_verified).
+ * The sprite write itself is done by the client through /api/master-library/save (mock) or
+ * /api/master-branch/save (master, admin only); /push records it.
  */
 
 const express = require("express");
@@ -41,6 +47,10 @@ const allowSelfApproval = () => String(process.env.ALLOW_SELF_APPROVAL || "").to
 const isOwnRequest = (r, email) => !allowSelfApproval() && norm(r.requestedBy) === norm(email);
 
 const TARGET_SPRITES = ["crmutil_icons", "svg_cssicons"]; // utilicon / cssicon
+const OPEN = ["pending", "approved"];
+const stageOf = (r) => (r && r.stage === "master" ? "master" : "mock");
+// Where an icon goes back to when a request of that stage is rejected or deleted.
+const startStatus = (r) => (stageOf(r) === "master" ? "mock_verified" : "unverified");
 const str = (v, max) => String(v == null ? "" : v).slice(0, max || 500);
 
 // Optional access expiry: ISO string, must be a valid future time. "" clears it. Returns null when invalid.
@@ -85,6 +95,8 @@ function createWorkflowRouter({ requireSession }) {
         return assigned && norm(assigned) !== e ? "" : type;
     }
     const slotDecision = (r, slot) => (slot === "designer" ? r.designerDecision : slot === "ui" ? r.uiDecision : "");
+    // Mock push: the requester (or an admin). Master push: admin only. req.role is set by requireRole.
+    const canPush = (req, r) => req.role === "admin" || (stageOf(r) === "mock" && norm(r.requestedBy) === norm(me(req).email));
 
     // Mail every active approver of `type` (except the requester); returns { sent[], failed[] }.
     async function mailApprovers(req, db, request, type, members) {
@@ -111,10 +123,12 @@ function createWorkflowRouter({ requireSession }) {
         return results.some((r) => r.sent.some((x) => x.dev)) ? "logged" : "sent";
     }
 
-    async function setIconStatus(db, symbolId, sprite, status, req) {
+    // drawing: fingerprint of the UI library drawing that was pushed ("" for any other change), so the Library
+    // can tell a pushed icon from one whose drawing changed in the UI library afterwards.
+    async function setIconStatus(db, symbolId, sprite, status, req, drawing) {
         const rows = await db.all("icon_status");
         const row = rows.find((r) => r.symbolId === symbolId && r.sprite === sprite);
-        const fields = { symbolId, sprite, status, updatedBy: me(req).email || "" };
+        const fields = { symbolId, sprite, status, drawing: str(drawing, 80), updatedBy: me(req).email || "" };
         if (row) await db.update("icon_status", row.ROWID, fields);
         else await db.insert("icon_status", fields);
     }
@@ -364,7 +378,7 @@ function createWorkflowRouter({ requireSession }) {
     // ── icon status ─────────────────────────────────────────────────────────
     router.get("/icon-status", wrap(async (req, res) => {
         const rows = await store.forRequest(req).all("icon_status");
-        res.json({ success: true, statuses: rows.map((r) => ({ symbolId: r.symbolId, sprite: r.sprite, status: r.status })) });
+        res.json({ success: true, statuses: rows.map((r) => ({ symbolId: r.symbolId, sprite: r.sprite, status: r.status, drawing: r.drawing || "" })) });
     }));
 
     // ── requests ────────────────────────────────────────────────────────────
@@ -379,20 +393,35 @@ function createWorkflowRouter({ requireSession }) {
         if (!svg) return res.status(400).json({ success: false, message: "svg required" });
         if (svg.length > 6000) return res.status(400).json({ success: false, message: `This icon's SVG is too large to store in a request (${svg.length} of 6000 characters). Simplify the icon first.` });
 
+        const stage = b.stage === "master" ? "master" : "mock";
+
         const db = store.forRequest(req);
-        const open = (await db.all("icon_requests")).find(
-            (r) => r.symbolId === symbolId && r.sprite === sprite && ["pending", "approved"].includes(r.status));
-        if (open) return res.status(409).json({ success: false, message: "An open request already exists for this icon", request: open });
+        const sameIcon = (await db.all("icon_requests")).filter((r) => r.symbolId === symbolId && r.sprite === sprite);
+        const open = sameIcon.find((r) => OPEN.includes(r.status));
+        if (open) {
+            return res.status(409).json({ success: false, request: open,
+                message: `An open ${stageOf(open)} request already exists for this icon (${open.status === "approved" ? "audits passed, waiting for the push" : "in audit"})` });
+        }
+        // The Library compares the icon with the mock/master sprites (inMock / inMaster); the stored status covers the rest.
+        const row = (await db.all("icon_status")).find((r) => r.symbolId === symbolId && r.sprite === sprite);
+        const current = (row && row.status) || "unverified";
+        // Requests from before the two stages have no stage: their push went to REPO_BRANCH, which is the mock branch now.
+        const pushedToMaster = sameIcon.some((r) => r.status === "pushed" && stageOf(r) === "master");
+        const onMaster = b.inMaster === true || (current === "master_verified" && pushedToMaster);
+        const onMock = b.inMock === true || current === "mock_verified" || current === "master_verified";
+        if (onMaster) return res.status(409).json({ success: false, message: "This icon is already master verified" });
+        if (stage === "mock" && onMock) return res.status(409).json({ success: false, message: "This icon is already on the mock branch — request the push to master instead" });
+        if (stage === "master" && !onMock) return res.status(409).json({ success: false, message: "Only a mock verified icon can be requested for master — get it audited and pushed to mock first" });
 
         const saved = await db.insert("icon_requests", {
             symbolId, sprite, iconName: str(b.iconName || symbolId, 200), svg,
-            targetSprite, note: str(b.note, 1000),
+            targetSprite, note: str(b.note, 1000), stage,
             requestedBy: me(req).email || "", requestedByName: me(req).name || "",
             status: "pending", assignedDesigner: "", assignedUI: "",
             designerDecision: "", uiDecision: "", designerBy: "", uiBy: "", notifiedDesigners: "", notifiedUI: "", pushCommitSha: ""
         });
-        await setIconStatus(db, symbolId, sprite, "requested", req);
-        await logEvent(db, saved.ROWID, req, "requested", b.note);
+        await setIconStatus(db, symbolId, sprite, stage === "master" ? "master_requested" : "requested", req);
+        await logEvent(db, saved.ROWID, req, stage === "master" ? "requested_master" : "requested", b.note);
 
         // Step 1: submitting mails the Visual audit approvers only (a mail problem never blocks the request).
         // The UI audit approvers are mailed after a Visual audit approver approves (see /review).
@@ -431,7 +460,8 @@ function createWorkflowRouter({ requireSession }) {
             return res.status(403).json({ success: false, message: "Not allowed for your role" });
         }
         res.json({ success: true, request: r, events: events.filter((e) => String(e.requestId) === String(r.ROWID)),
-            canReview: r.status === "pending" && slot && !slotDecision(r, slot) ? slot : "" });
+            canReview: r.status === "pending" && slot && !slotDecision(r, slot) ? slot : "",
+            canPush: r.status === "approved" && canPush(req, r) ? stageOf(r) : "" });
     }));
 
     router.post("/requests/:id/assign", requireRole(["admin"]), wrap(async (req, res) => {
@@ -504,8 +534,8 @@ function createWorkflowRouter({ requireSession }) {
             uiMail = { sent: out.sent.length, failed: out.failed.length, local: out.sent.some((x) => x.dev), error: (out.failed[0] || {}).error || "", pool: out.pool.length };
             await db.update("icon_requests", r.ROWID, { notifiedUI: out.pool.map((x) => x.userEmail).join(","), mailStatus: mailState([out]) });
         }
-        if (fields.status === "approved") await setIconStatus(db, r.symbolId, r.sprite, "mock_verified", req);
-        if (fields.status === "rejected") await setIconStatus(db, r.symbolId, r.sprite, "unverified", req);
+        // Both audits passed: the icon keeps its requested status until it is pushed (mock: requester, master: admin).
+        if (fields.status === "rejected") await setIconStatus(db, r.symbolId, r.sprite, startStatus(r), req);
         res.json({ success: true, request: saved, uiMail });
     }));
 
@@ -557,22 +587,41 @@ function createWorkflowRouter({ requireSession }) {
         }
         await db.remove("icon_requests", r.ROWID);
         for (const ev of (await db.all("request_events")).filter((e) => String(e.requestId) === String(r.ROWID))) await db.remove("request_events", ev.ROWID);
-        // Without an open request the icon goes back to unverified (a pushed icon stays master verified).
+        // Without an open request the icon goes back to where this stage started (a pushed icon keeps its status).
         if (r.status !== "pushed") {
-            const stillOpen = (await db.all("icon_requests")).some((x) => x.symbolId === r.symbolId && x.sprite === r.sprite && ["pending", "approved"].includes(x.status));
-            if (!stillOpen) await setIconStatus(db, r.symbolId, r.sprite, "unverified", req);
+            const stillOpen = (await db.all("icon_requests")).some((x) => x.symbolId === r.symbolId && x.sprite === r.sprite && OPEN.includes(x.status));
+            if (!stillOpen) await setIconStatus(db, r.symbolId, r.sprite, startStatus(r), req);
         }
         res.json({ success: true });
     }));
 
-    router.post("/requests/:id/push", requireRole(["admin"]), wrap(async (req, res) => {
+    router.post("/requests/:id/push", requireRole(), wrap(async (req, res) => {
         const db = store.forRequest(req);
         const r = (await db.all("icon_requests")).find((x) => String(x.ROWID) === req.params.id);
         if (!r) return res.status(404).json({ success: false, message: "Request not found" });
-        if (r.status !== "approved") return res.status(409).json({ success: false, message: "Both teams must approve before pushing" });
-        const saved = await db.update("icon_requests", r.ROWID, { status: "pushed", pushCommitSha: str(req.body.commitSha, 80) });
-        await setIconStatus(db, r.symbolId, r.sprite, "master_verified", req);
-        await logEvent(db, r.ROWID, req, "pushed", `to ${r.targetSprite}`);
+        if (r.status === "pushed") return res.status(409).json({ success: false, message: "Already pushed" });
+        if (r.status !== "approved") return res.status(409).json({ success: false, message: "Both the Visual audit and the UI audit must approve before pushing" });
+        if (!canPush(req, r)) {
+            return res.status(403).json({ success: false, message: stageOf(r) === "master"
+                ? "Only an admin can approve and push to the master branch" : "Only the requester (or an admin) can push this icon to the mock branch" });
+        }
+        const master = stageOf(r) === "master";
+        const saved = await db.update("icon_requests", r.ROWID, { status: "pushed", pushCommitSha: str(req.body.commitSha, 80), pushedBy: me(req).email || "" });
+        await setIconStatus(db, r.symbolId, r.sprite, master ? "master_verified" : "mock_verified", req, req.body.drawing);
+        await logEvent(db, r.ROWID, req, master ? "pushed_master" : "pushed_mock",
+            `to ${r.targetSprite}${req.body.version ? " · published " + str(req.body.version, 60) : ""}${req.body.alreadyThere ? " (already in the sprite)" : ""}`);
+        res.json({ success: true, request: saved });
+    }));
+
+    // Admin turns down a master request after both audits passed: the icon stays mock verified.
+    router.post("/requests/:id/decline", requireRole(["admin"]), wrap(async (req, res) => {
+        const db = store.forRequest(req);
+        const r = (await db.all("icon_requests")).find((x) => String(x.ROWID) === req.params.id);
+        if (!r) return res.status(404).json({ success: false, message: "Request not found" });
+        if (stageOf(r) !== "master" || r.status !== "approved") return res.status(409).json({ success: false, message: "Only an audited master request can be declined" });
+        const saved = await db.update("icon_requests", r.ROWID, { status: "rejected" });
+        await setIconStatus(db, r.symbolId, r.sprite, startStatus(r), req);
+        await logEvent(db, r.ROWID, req, "admin_declined", req.body && req.body.note);
         res.json({ success: true, request: saved });
     }));
 

@@ -77,21 +77,24 @@
    */
   function _loadVersion(refresh) {
     var r = SF.repoLib;
-    return new Promise(function (resolve) {
-      $.ajax({
-        url: _url('api/master-library' + (refresh ? '?refresh=1' : '')),
-        type: 'GET',
-        dataType: 'json',
-        timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000,
-        headers: _headers(),
-        success: function (d) {
-          r.version = (d && d.packageVersion) || null;
-          r.versionRepo = (d && d.repo) || null;
-          resolve();
-        },
-        error: function () { resolve(); }
+    var get = function (api, apply) {
+      return new Promise(function (resolve) {
+        $.ajax({
+          url: _url(api + (refresh ? '?refresh=1' : '')),
+          type: 'GET',
+          dataType: 'json',
+          timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000,
+          headers: _headers(),
+          success: function (d) { apply(d || {}); resolve(); },
+          error: function () { resolve(); }
+        });
       });
-    }).then(function () { _renderVersion(); });
+    };
+    // Mock branch (REPO_BRANCH) and master branch (MASTER_REPO_BRANCH) of CRM_UI_LIBRARY.
+    return Promise.all([
+      get('api/master-library', function (d) { r.version = d.packageVersion || null; r.versionRepo = d.repo || null; }),
+      get('api/master-branch', function (d) { r.masterVersion = d.packageVersion || null; r.masterVersionRepo = d.repo || null; })
+    ]).then(function () { _renderVersion(); });
   }
 
   function _getListing(refresh) {
@@ -725,27 +728,38 @@
   }
 
   function _renderVersion() {
-    var v = SF.repoLib.version, $bar = $('#libVersionBar');
-    var show = !!(v && v.version) && !_signedOut();
-    $bar.toggleClass('hidden', !show);
+    var r = SF.repoLib, mock = r.version, master = r.masterVersion;
+    var show = !!((mock && mock.version) || (master && master.version)) && !_signedOut();
+    $('#libVersionBar').toggleClass('hidden', !show);
     if (!show) return;
-    var cfg = SF.repoLib.versionRepo || _cfg();
-    $('#libVersionValue').text(v.version).attr('title', (v.name ? v.name + '\n' : '') + (v.file || 'package.json') +
-      (cfg.branch ? ' @ ' + cfg.branch : '') + (v.commit ? ' · ' + String(v.commit).slice(0, 8) : ''));
-    $('#libVersionName').text(v.name || (v.file || 'package.json'));
+    [['mock', mock, r.versionRepo || _cfg(), '#libVersionValue', '#libVersionBranch'],
+     ['master', master, r.masterVersionRepo || {}, '#libMasterVersionValue', '#libMasterVersionBranch']].forEach(function (x) {
+      var v = x[1], cfg = x[2];
+      $('[data-version-item="' + x[0] + '"]').toggleClass('hidden', !(v && v.version));
+      if (!v || !v.version) return;
+      var $v = $(x[3]), changed = $v.text() !== '—' && $v.text() !== v.version;
+      $v.text(v.version).attr('title', (v.name ? v.name + '\n' : '') + (v.file || 'package.json') +
+        (cfg.branch ? ' @ ' + cfg.branch : '') + (v.commit ? ' · ' + String(v.commit).slice(0, 8) : ''));
+      $(x[4]).text(cfg.branch || '');
+      if (changed) { $v.addClass('is-updated'); setTimeout(function () { $v.removeClass('is-updated'); }, 2500); }
+    });
+    var any = (mock && mock.version) ? mock : master;
+    $('#libVersionName').text(any.name || (any.file || 'package.json'));
   }
 
   /**
    * Show the version a save just committed (save response: packageVersion / release) in the Library version bar
    * without waiting for a page reload or sync.
    */
-  SF.setLibraryVersion = function (res) {
+  SF.setLibraryVersion = function (res, stage) {
     if (!res) return;
-    var v = res.packageVersion ||
-      (res.release ? { name: res.release.name, version: res.release.version, file: 'resources/package.json', commit: res.commit || null } : null);
+    // The version just published wins over the listing's (which may still be the pre-push read).
+    var v = (res.release ? { name: res.release.name, version: res.release.version, file: 'resources/package.json', commit: res.commit || null } : null) ||
+      res.packageVersion;
     if (!v || !v.version) return;
-    SF.repoLib.version = v;
-    if (res.repo) SF.repoLib.versionRepo = res.repo;
+    var master = stage === 'master' || (!stage && res.branch && (SF.repoLib.masterVersionRepo || {}).branch === res.branch);
+    SF.repoLib[master ? 'masterVersion' : 'version'] = v;
+    if (res.repo) SF.repoLib[master ? 'masterVersionRepo' : 'versionRepo'] = res.repo;
     _renderVersion();
   };
 
@@ -839,13 +853,14 @@
 
 (function (SF, $) {
   'use strict';
-  $(document).on('click', '#libVersionCopyBtn', function () {
-    var v = SF.repoLib && SF.repoLib.version && SF.repoLib.version.version;
+  $(document).on('click', '[data-version-copy]', function () {
+    var key = $(this).data('version-copy') === 'master' ? 'masterVersion' : 'version';
+    var v = SF.repoLib && SF.repoLib[key] && SF.repoLib[key].version;
     if (!v) return;
     var $btn = $(this);
     var done = function () {
       $btn.addClass('is-copied').find('span').text('Copied');
-      setTimeout(function () { $btn.removeClass('is-copied').find('span').text('Copy version'); }, 1500);
+      setTimeout(function () { $btn.removeClass('is-copied').find('span').text('Copy'); }, 1500);
     };
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done, function () { SF.showToast('Copy failed'); });
     else { var ta = document.createElement('textarea'); ta.value = v; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) { SF.showToast('Copy failed'); } ta.remove(); }

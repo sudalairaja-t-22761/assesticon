@@ -70,8 +70,9 @@ function approvalMail(req, { role, request }) {
     const roleName = role === "designer" ? "Visual audit" : "UI audit";
     const link = requestLink(req, request);
     const target = request.targetSprite === "svg_cssicons" ? "cssicon (svg_cssicons.svg)" : "utilicon (crmutil_icons.svg)";
+    const branch = request.stage === "master" ? "Master branch" : "Mock branch";
     const by = request.requestedByName || request.requestedBy;
-    const subject = `Waiting for your ${roleName} approval: icon "${request.iconName}"`;
+    const subject = `Waiting for your ${roleName} approval (${branch.toLowerCase()}): icon "${request.iconName}"`;
 
     const row = (k, v) => `<tr><td style="padding:6px 16px 6px 0;color:#6b7280;font-size:13px;white-space:nowrap">${k}</td><td style="padding:6px 0;font-size:14px;color:#111827">${v}</td></tr>`;
     const html =
@@ -82,7 +83,7 @@ function approvalMail(req, { role, request }) {
         `<p style="margin:0 0 6px;font-size:15px;color:#111827">Hi,</p>` +
         `<p style="margin:0 0 18px;font-size:15px;color:#111827">The icon <b>${esc(request.iconName)}</b> is <b>waiting for your ${roleName} approval</b>.</p>` +
         `<table role="presentation" style="border-collapse:collapse;margin-bottom:22px">` +
-        row("Icon", esc(request.iconName)) + row("Requested by", esc(by)) + row("Move to", esc(target)) + row("Your audit", `${roleName}`) +
+        row("Icon", esc(request.iconName)) + row("Requested by", esc(by)) + row("Move to", esc(branch + " · " + target)) + row("Your audit", `${roleName}`) +
         (request.note ? row("Note", esc(request.note)) : "") +
         `</table>` +
         (link
@@ -94,7 +95,7 @@ function approvalMail(req, { role, request }) {
         `</table></div>`;
     const text =
         `Icon "${request.iconName}" is waiting for your ${roleName} approval.\n\n` +
-        `Requested by: ${by}\nMove to: ${target}\n` + (request.note ? `Note: ${request.note}\n` : "") +
+        `Requested by: ${by}\nMove to: ${branch} · ${target}\n` + (request.note ? `Note: ${request.note}\n` : "") +
         (link ? `\nReview and approve: ${link}\n` : `\nOpen Icon Requests in the Icon Assets tool to approve or reject.\n`);
     return { subject, html, text };
 }

@@ -39,16 +39,29 @@
       </h3>
     </div>
     <div class="panel-body">
-      <!-- Library version: "version" from package.json at the tip of the repo branch -->
+      <!-- Library versions: "version" of resources/package.json at the tip of the mock and the master branch -->
       <div class="lib-version-bar hidden" id="libVersionBar">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-        <span class="lib-version-label">Library version</span>
-        <code class="lib-version-value" id="libVersionValue"></code>
+        <div class="lib-version-item lib-version-mock" data-version-item="mock">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+          <span class="lib-version-label">Mock version</span>
+          <code class="lib-version-value" id="libVersionValue">—</code>
+          <span class="lib-version-branch" id="libVersionBranch"></span>
+          <button class="btn btn-ghost btn-sm" data-version-copy="mock" type="button" title="Copy the exact mock version from package.json">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <span>Copy</span>
+          </button>
+        </div>
+        <div class="lib-version-item lib-version-master" data-version-item="master">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+          <span class="lib-version-label">Master version</span>
+          <code class="lib-version-value" id="libMasterVersionValue">—</code>
+          <span class="lib-version-branch" id="libMasterVersionBranch"></span>
+          <button class="btn btn-ghost btn-sm" data-version-copy="master" type="button" title="Copy the exact master version from package.json">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <span>Copy</span>
+          </button>
+        </div>
         <span class="lib-version-name" id="libVersionName"></span>
-        <button class="btn btn-ghost btn-sm" id="libVersionCopyBtn" type="button" title="Copy the exact version from package.json">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          <span>Copy version</span>
-        </button>
       </div>
       <!-- Iconassest repo sprite (Sprite/crmutil_icons.svg) split into single icons, read directly from the repo -->
       <div class="lib-repo-bar" id="libRepoBar">

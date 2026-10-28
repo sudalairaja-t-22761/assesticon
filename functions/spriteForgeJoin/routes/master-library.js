@@ -321,7 +321,9 @@ function createMasterLibraryRouter(deps) {
         }
     });
 
-    router.post("/save", gate, async (req, res) => {
+    // deps.saveGuard: extra middleware for commits (the master branch only takes admin pushes).
+    const saveGuards = deps.saveGuard ? [deps.saveGuard] : [];
+    router.post("/save", gate, ...saveGuards, async (req, res) => {
         try {
             if (!cfg.isConfigured) throw notConfigured();
             const access = commitAccess(req);

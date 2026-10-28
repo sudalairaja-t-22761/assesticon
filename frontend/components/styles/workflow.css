@@ -22,6 +22,16 @@
 .vf-badge-requested { background: var(--accent-subtle); color: var(--accent-text); }
 .vf-badge-mock_verified { background: var(--warning-bg); color: var(--warning); }
 .vf-badge-master_verified { background: var(--success-bg); color: var(--success); }
+.vf-badge-master_requested { background: var(--accent-subtle); color: var(--success); border-color: var(--success-bg); }
+.vf-badge-mock_verified { cursor: pointer; }
+.vf-badge-mock_verified:hover { border-color: var(--warning); }
+
+/* Request stage: mock branch → master branch */
+.vf-stage-mock { background: var(--warning-bg); color: var(--warning); }
+.vf-stage-master { background: var(--success-bg); color: var(--success); }
+.vf-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.vf-flow:empty { display: none; }
+.vf-arrow { color: var(--text-tertiary); }
 
 .vf-status-filter { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
 

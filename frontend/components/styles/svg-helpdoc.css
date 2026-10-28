@@ -1068,3 +1068,9 @@
 }
 .lib-version-name { flex: 1 1 auto; min-width: 0; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lib-version-bar .is-copied { color: var(--success); border-color: var(--success); }
+.lib-version-item { display: flex; align-items: center; gap: 8px; padding-right: 12px; }
+.lib-version-item + .lib-version-item { padding-left: 12px; border-left: 1px solid var(--border-light); }
+.lib-version-item.hidden { display: none; }
+.lib-version-master svg { color: var(--success); }
+.lib-version-branch { color: var(--text-tertiary); font-size: 11px; }
+.lib-version-value.is-updated { border-color: var(--success); box-shadow: 0 0 0 2px var(--success-bg); transition: box-shadow .3s; }

@@ -743,6 +743,17 @@ app.use("/api/icon-library", createMasterLibraryRouter({
     tokenVar: "ICON_REPO_TOKEN"
 }));
 
+// Master branch of CRM_UI_LIBRARY (MASTER_REPO_BRANCH, default CRM_UI_LIBRARY_ICON_BRANCH_CLONE): read by every
+// signed-in user for the Library compare; commits (approved master requests) are admin only.
+app.use("/api/master-branch", createMasterLibraryRouter({
+    getSession,
+    requireSession,
+    cfg: require("./lib/repo-config").loadMasterRepo(),
+    tag: "master-branch",
+    tokenVar: "MASTER_REPO_TOKEN / REPO_TOKEN",
+    saveGuard: require("./lib/roles").requireRole(["admin"])
+}));
+
 // Icon verification workflow: members/roles, requests, icon status (Catalyst Data Store tables:
 // members, icon_status, icon_requests, request_events — local JSON file in dev).
 const { createWorkflowRouter } = require("./routes/workflow");
