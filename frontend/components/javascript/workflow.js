@@ -280,7 +280,9 @@
     $bar.html(chips.map(function (c) {
       return '<button type="button" class="lib-source-chip' + (c[0] === cur ? ' active' : '') + '" data-vf-filter="' + c[0] + '">' +
         esc(c[1]) + ' <span class="lib-source-count">' + (counts[c[0]] || 0) + '</span></button>';
-    }).join(''));
+    }).join('') +
+      // Separate filter: one chip per icon category (library-icon-categories.js); combines with the status chips.
+      (SF.iconCategories ? SF.iconCategories.chipsHtml() : ''));
   }
 
   // Keep the status counts in step with the grid: the repo icons usually arrive after the statuses,

@@ -34,6 +34,7 @@
 .vf-arrow { color: var(--text-tertiary); }
 
 .vf-status-filter { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.vf-filter-sep { width: 1px; align-self: stretch; margin: 2px 4px; background: var(--border); }
 
 .vf-form { display: grid; gap: 12px; max-width: 520px; }
 .vf-form label { display: grid; gap: 4px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }

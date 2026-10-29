@@ -15,6 +15,12 @@
  *                                         approverType: "none" (default) | "designer" | "ui"  — who may be assigned to review
  *   DELETE /api/members/:id                                                                     [admin]
  *   GET    /api/icon-status             → [{ symbolId, sprite, status }]
+ *   GET    /api/icon-categories         → { categories: [{ id, name, options, builtin, names[] }] }  Library icon categories;
+ *                                         options: true gives its icons the Size + Stroke width options in the preview
+ *   POST   /api/icon-categories         → { name, options? }  new category                                          [admin]
+ *   PATCH  /api/icon-categories/:id     → { name?, options? }                                                       [admin]
+ *   DELETE /api/icon-categories/:id     → not the built-in Stroke icons category                                    [admin]
+ *   PUT    /api/icon-categories/:id/icons → { names[], enabled }  add / remove icons                                [admin]
  *   POST   /api/requests                → { symbolId, iconName, svg, targetSprite, note, stage?, inMock? }; the Visual audit approvers are mailed first
  *                                         stage "mock" (default): an unverified icon; stage "master": a mock verified icon
  *   GET    /api/requests                → admins see all; others see requested-by-me + assigned-to-me
@@ -69,7 +75,7 @@ function parseApprover(v) {
 function createWorkflowRouter({ requireSession }) {
     const router = express.Router();
     // Mounted at /api, so gate only our own paths (other /api routes stay as they were).
-    router.use(["/me", "/users", "/org-users", "/members", "/roles", "/mail", "/icon-status", "/requests", "/activity-log"], requireSession);
+    router.use(["/me", "/users", "/org-users", "/members", "/roles", "/mail", "/icon-status", "/icon-categories", "/requests", "/activity-log"], requireSession);
 
     const me = (req) => req.auth.session.user;
 
@@ -380,6 +386,41 @@ function createWorkflowRouter({ requireSession }) {
         const rows = await store.forRequest(req).all("icon_status");
         res.json({ success: true, statuses: rows.map((r) => ({ symbolId: r.symbolId, sprite: r.sprite, status: r.status, drawing: r.drawing || "" })) });
     }));
+
+    // ── icon categories (filter chips; Size + Stroke width in the Library preview) ──
+    const cats = require("../lib/icon-options");
+    // Validation errors from lib/icon-options carry a status; anything else is a 500 from wrap().
+    const catWrap = (fn) => wrap(async (req, res) => {
+        try { await fn(req, res); }
+        catch (err) {
+            if (!err.status) { console.error("[icon-categories]", req.method, req.path, err.stack || err.message); throw err; }
+            res.status(err.status).json({ success: false, message: err.message });
+        }
+    });
+    const catList = async (req, res, extra) => res.json({ success: true, ...extra, categories: await cats.list(req) });
+    router.get("/icon-categories", catWrap((req, res) => catList(req, res)));
+    router.post("/icon-categories", requireRole(["admin"]), catWrap(async (req, res) => {
+        const category = await cats.createCategory(req, req.body || {});
+        await catList(req, res, { category });
+    }));
+    router.patch("/icon-categories/:id", requireRole(["admin"]), catWrap(async (req, res) => {
+        const category = await cats.updateCategory(req, req.params.id, req.body || {});
+        await catList(req, res, { category });
+    }));
+    router.delete("/icon-categories/:id", requireRole(["admin"]), catWrap(async (req, res) => {
+        await cats.deleteCategory(req, req.params.id);
+        await catList(req, res);
+    }));
+    router.put("/icon-categories/:id/icons", requireRole(["admin"]), catWrap(async (req, res) => {
+        const b = req.body || {};
+        const category = await cats.setIcons(req, req.params.id, b.names || b.name, !!b.enabled);
+        await catList(req, res, { category });
+    }));
+    // Anything else under /icon-categories: say exactly what arrived (method + URL) instead of Express's HTML 404.
+    router.all(["/icon-categories", "/icon-categories/*"], (req, res) => {
+        console.warn("[icon-categories] no route for", req.method, req.originalUrl);
+        res.status(404).json({ success: false, message: `No route for ${req.method} ${req.originalUrl}` });
+    });
 
     // ── requests ────────────────────────────────────────────────────────────
     router.post("/requests", requireRole(), wrap(async (req, res) => {

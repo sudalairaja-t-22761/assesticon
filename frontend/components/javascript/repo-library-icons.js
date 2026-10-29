@@ -156,6 +156,7 @@
       if (!spriteStyle && p.styleContent) spriteStyle = p.styleContent;
       if (!spriteDefs && p.defsContent) spriteDefs = p.defsContent;
     });
+    spriteStyle = SF.stripExportCss(spriteStyle); // an export's ":root:root{fill:…}" in the sprite must not paint every preview
 
     var base = spriteName.replace(/\.svg$/i, '');
     return parsed.map(function (p) {
@@ -180,9 +181,27 @@
 
   function _escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
+  /**
+   * CSS without selectors that reach outside one icon (:root, html, body, *, a bare svg). Inside a sprite such a rule
+   * repaints every icon (e.g. a coloured export's ":root:root{fill:…}"), so it is never added and never shown.
+   */
+  var GLOBAL_SEL = /^(?::root|html|body|\*|svg)(?![\w-])/i;
+  var EXPORT_SEL = /^:root:root$/i; // the colour rule older studio exports wrote
+  function stripRules(css, test) {
+    return String(css || '').replace(/([^{}]+)\{([^{}]*)\}/g, function (all, sel, body) {
+      if (/^\s*@/.test(sel)) return all;
+      var keep = sel.split(',').filter(function (x) { return x.trim() && !test.test(x.trim()); });
+      return keep.length ? keep.join(',') + '{' + body + '}' : '';
+    });
+  }
+  // A single icon being added / replaced: none of its page-wide rules go into the sprite.
+  SF.stripGlobalCss = function (css) { return stripRules(css, GLOBAL_SEL); };
+  // A whole sprite: keep its own :root variables (--zcicn-color-baseStroke …), drop only the export colour rule.
+  SF.stripExportCss = function (css) { return stripRules(css, EXPORT_SEL); };
+
   /** Give a new icon's own classes / ids a unique prefix so they cannot clash with the sprite's. */
   function _isolate(icon, token) {
-    var style = icon.styleContent || '', defs = icon.defsContent || '', content = icon.svgContent || '';
+    var style = SF.stripGlobalCss(icon.styleContent || ''), defs = icon.defsContent || '', content = icon.svgContent || '';
     var classMap = {}, idMap = {}, m;
     var selRe = /([^{}]+)\{/g;
     while ((m = selRe.exec(style.replace(/\/\*[\s\S]*?\*\//g, ''))) !== null) {

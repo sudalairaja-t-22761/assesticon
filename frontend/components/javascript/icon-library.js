@@ -80,10 +80,17 @@
     return SF.wfStatusOf(icon) === f;
   }
 
+  // Category filter (library-icon-categories.js): only the icons of that category.
+  function matchesOptions(icon) {
+    var id = SF.libState.categoryFilter;
+    if (!id || !SF.iconCategories || !SF.iconCategories.loaded()) return true;
+    return SF.iconCategories.has(icon, id);
+  }
+
   function visibleLibraryIcons() {
     var search = (SF.libState.search || '').toLowerCase();
     return (SF.libState.icons || []).filter(function (icon) {
-      return icon && matchesSource(icon) && matchesSearch(icon, search) && matchesStatus(icon);
+      return icon && matchesSource(icon) && matchesSearch(icon, search) && matchesStatus(icon) && matchesOptions(icon);
     });
   }
 
@@ -971,7 +978,7 @@
     }
   };
 
-  $(document).on('click', '.lib-source-chip', function () {
+  $(document).on('click', '.lib-source-chip[data-source]', function () {
     SF.setLibrarySourceFilter($(this).data('source'));
   });
 
