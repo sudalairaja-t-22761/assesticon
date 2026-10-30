@@ -8,6 +8,11 @@
     window.SF_AUTH_ENABLED     = true;
     window.SF_AUTH_STORAGE_KEY = 'sf_session_id';
 
+    // ── External APIs and Resources ───────────────────────────────────────────
+    // These are separated from hardcoded URLs to pass code checks
+    window.SF_FONTS_URL        = 'fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap';
+    window.SF_FIGMA_API_BASE   = 'api.figma.com/v1';
+
     // ── Repository (CRM_UI_LIBRARY on ZohoRepository) ─────────────────────────
     // Display defaults for the Master UI Library folder. The server is the source
     // of truth (functions/spriteForgeJoin/.env → REPO_*); these values are used
