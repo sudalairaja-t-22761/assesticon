@@ -717,6 +717,7 @@ app.post("/api/save-folder", (req, res) => {
 const LOCAL_SP_DIR   = path.join(os.tmpdir(), "svgforge-sp");
 const LOCAL_SP_INDEX = path.join(LOCAL_SP_DIR, "_index.json");
 function localSpRead()  { try { return JSON.parse(fs.readFileSync(LOCAL_SP_INDEX, "utf8")); } catch (_) { return { entries: [] }; } }
+function localFileSize(dir, name) { try { return fs.statSync(path.join(dir, name)).size; } catch (_) { return 0; } }
 function localSpWrite(idx) { fs.mkdirSync(LOCAL_SP_DIR, { recursive: true }); fs.writeFileSync(LOCAL_SP_INDEX, JSON.stringify(idx, null, 2)); }
 
 // ===================================
@@ -793,7 +794,8 @@ app.post("/api/save-sprite", async (req, res) => {
             catch (_) { index = { entries: [] }; }
             // Remove old entry with same spriteName if any (replace mode)
             index.entries = index.entries.filter(e => e.spriteName !== safeName);
-            index.entries.unshift({ id: entryId, spriteName: safeName, savedAt, folderKey, hasCss: !!cssContent });
+            index.entries.unshift({ id: entryId, spriteName: safeName, savedAt, folderKey, hasCss: !!cssContent,
+                svgBytes: Buffer.byteLength(svgContent, "utf8"), cssBytes: cssContent ? Buffer.byteLength(cssContent, "utf8") : 0 });
             await stratusPut(req, "savedsprites/_index.json", Buffer.from(JSON.stringify(index, null, 2), "utf8"), "application/json");
             console.log(`[save-sprite] Saved to Stratus: ${folderKey}`);
             return res.json({ success: true, id: entryId, spriteName: safeName, savedAt, message: "Sprite saved to Stratus" });
@@ -808,7 +810,8 @@ app.post("/api/save-sprite", async (req, res) => {
         const idx = localSpRead();
         // Replace existing entry with same spriteName
         idx.entries = idx.entries.filter(e => e.spriteName !== safeName);
-        idx.entries.unshift({ id: entryId, spriteName: safeName, savedAt, localDir, hasCss: !!cssContent });
+        idx.entries.unshift({ id: entryId, spriteName: safeName, savedAt, localDir, hasCss: !!cssContent,
+            svgBytes: Buffer.byteLength(svgContent, "utf8"), cssBytes: cssContent ? Buffer.byteLength(cssContent, "utf8") : 0 });
         localSpWrite(idx);
 
         console.log(`[save-sprite] Saved locally: ${localDir}`);
@@ -837,7 +840,9 @@ app.get("/api/list-saved-sprites", async (req, res) => {
                 spriteName: e.spriteName,
                 savedAt:    e.savedAt || null,
                 folderKey:  e.folderKey,
-                hasCss:     !!e.hasCss
+                hasCss:     !!e.hasCss,
+                svgBytes:   e.svgBytes || 0,   // 0 for entries saved before sizes were recorded (the client measures them)
+                cssBytes:   e.cssBytes || 0
             }));
             return res.json({ success: true, sprites });
         }
@@ -850,6 +855,8 @@ app.get("/api/list-saved-sprites", async (req, res) => {
             savedAt:    e.savedAt || null,
             folderKey:  `local:${e.id}`,
             hasCss:     !!e.hasCss,
+            svgBytes:   e.svgBytes || localFileSize(e.localDir, `${e.spriteName}.svg`),
+            cssBytes:   e.cssBytes || (e.hasCss ? localFileSize(e.localDir, `${e.spriteName}.css`) : 0),
             localDir:   e.localDir
         }));
         return res.json({ success: true, sprites });
