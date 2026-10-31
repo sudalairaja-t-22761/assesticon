@@ -6,7 +6,8 @@
     "targets": [
       "spriteForgeJoin",
       "upload-to-stratus",
-      "save-assets"
+      "save-assets",
+      "spriteAppend"
     ],
     "source": "functions"
   },

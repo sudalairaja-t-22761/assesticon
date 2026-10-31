@@ -7,7 +7,9 @@
     "dev:backend": "FORCE_LOCAL_ENV=true node --watch --watch-path=functions/spriteForgeJoin/.env functions/spriteForgeJoin/index.js",
     "dev": "npm run dev:backend & npm run dev:frontend",
     "build:client": "node scripts/build-client.js",
-    "deploy": "npm run build:client && catalyst deploy --only functions:spriteForgeJoin,client"
+    "deploy": "npm run build:client && catalyst deploy --only functions:spriteForgeJoin,client",
+    "dev:append": "FORCE_LOCAL_ENV=true node --watch functions/spriteAppend/index.js",
+    "deploy:append": "catalyst deploy --only functions:spriteAppend"
   },
   "engines": {
     "node": ">=18"
