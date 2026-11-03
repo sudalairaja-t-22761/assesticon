@@ -533,12 +533,14 @@ function createWorkflowRouter({ requireSession }) {
         const mine = norm(me(req).email);
         const db = store.forRequest(req);
         let list = await db.all("icon_requests");
-        if (req.role !== "admin") {
-            const members = await db.all("members");
-            list = list.filter((r) => norm(r.requestedBy) === mine || reviewSlot(members, mine, r));
-        }
-        // The svg snapshot is only needed on the detail view.
-        res.json({ success: true, role: req.role, requests: list.map(({ svg, ...rest }) => rest).reverse() });
+        const members = await db.all("members");
+        if (req.role !== "admin") list = list.filter((r) => norm(r.requestedBy) === mine || reviewSlot(members, mine, r));
+        // The svg snapshot is only needed on the detail view. canReview / canPush say what this person may do on each row.
+        res.json({ success: true, role: req.role, requests: list.map(({ svg, ...rest }) => {
+            const slot = reviewSlot(members, mine, rest);
+            return { ...rest, canReview: rest.status === "pending" && slot && !slotDecision(rest, slot) ? slot : "",
+                canPush: rest.status === "approved" && canPush(req, rest) ? stageOf(rest) : "" };
+        }).reverse() });
     }));
 
     router.get("/requests/:id", requireRole(), wrap(async (req, res) => {

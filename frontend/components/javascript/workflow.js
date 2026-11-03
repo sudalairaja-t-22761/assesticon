@@ -527,19 +527,153 @@
   }
   $(document).on('click', '[data-vf-open-req]', function () { openRequest(String($(this).data('vf-open-req'))); $('html, body, .main').animate({ scrollTop: $('#wfRequestDetail').offset().top - 80 }, 200); });
 
-  function renderRequestsList() {
-    if (!wf.requests.length) { $('#wfRequestsList').html('<div class="vf-empty">No requests yet.</div>'); return; }
-    $('#wfRequestsList').html('<table class="vf-table"><thead><tr><th>Icon</th><th>Stage</th><th>Target</th><th>Requested by</th><th>Visual audit</th><th>UI audit</th><th>Status</th><th></th></tr></thead><tbody>' +
-      wf.requests.map(function (r) {
-        return '<tr class="vf-row" data-vf-req="' + esc(r.ROWID) + '">' +
-          '<td>' + esc(r.iconName) + '</td><td>' + stageTag(r) + '</td><td>' + esc(r.targetSprite === 'svg_cssicons' ? 'cssicon' : 'utilicon') + '</td>' +
-          '<td>' + esc(r.requestedByName || r.requestedBy) + '</td>' +
-          '<td>' + reviewerCell(r.assignedDesigner, r.designerDecision, r.designerBy, r.notifiedDesigners, r.status, 'designer') + '</td>' +
-          '<td>' + reviewerCell(r.assignedUI, r.uiDecision, r.uiBy, r.notifiedUI, r.status, 'ui', r.designerDecision !== 'approved') + '</td>' +
-          '<td>' + statusPill(r) + mailTag(r) + '</td>' +
-          '<td class="vf-row-actions">' + (canDelete(r) ? '<button class="btn btn-ghost btn-sm vf-pill" data-vf-req-del="' + esc(r.ROWID) + '" style="color:var(--danger)">Delete</button>' : '') + '</td></tr>';
-      }).join('') + '</tbody></table>');
+  // The Requests page is one table per step, so each person sees where every icon is and what is waiting for them.
+  var GROUPS = [
+    { key: 'visual', title: 'Visual audit', hint: 'Waiting for a Visual audit approver.', test: function (r) { return r.status === 'pending' && r.designerDecision !== 'approved'; } },
+    { key: 'ui', title: 'UI audit', hint: 'Visual audit approved — waiting for a UI audit approver.', test: function (r) { return r.status === 'pending' && r.designerDecision === 'approved'; } },
+    { key: 'ready', title: 'Ready to push', hint: 'Both audits passed. Mock: the requester pushes it. Master: an admin approves and pushes it.', test: function (r) { return r.status === 'approved'; } },
+    { key: 'done', title: 'Pushed', hint: 'On the branch; the npm version appears once it is published.', test: function (r) { return r.status === 'pushed'; } },
+    { key: 'rejected', title: 'Rejected', hint: 'Rejected in an audit or declined by an admin.', test: function (r) { return r.status === 'rejected'; } }
+  ];
+  function targetText(r) { return r.targetSprite === 'svg_cssicons' ? 'cssicon' : 'utilicon'; }
+  function whoCell(r) { return esc(r.requestedByName || r.requestedBy); }
+  // The action a row offers this person: Review (approver), Push (requester / admin), else what it waits for (pushes).
+  function actionCell(r) {
+    if (r.canReview) return '<button class="btn btn-primary btn-sm" type="button" data-vf-review-open="' + esc(r.ROWID) + '">Review · ' + esc(AUDIT[r.canReview]) + '</button>';
+    if (r.canPush) return '<button class="btn btn-primary btn-sm" type="button" data-vf-open-push="' + esc(r.ROWID) + '">' + (r.canPush === 'master' ? 'Approve &amp; push to master' : 'Push to mock') + '</button>';
+    if (r.status === 'pending') return ''; // the Approver column says who it waits for
+    if (r.status === 'approved') return '<span class="vf-msg">' + (stageOf(r) === 'master' ? 'waiting for an admin' : 'waiting for ' + esc(r.requestedByName || r.requestedBy) + ' to push') + '</span>';
+    return '';
   }
+  function decidedBy(decision, by, slot) { return decision ? decisionPill(decision, slot) + (by ? ' <span class="vf-msg">' + esc(by) + '</span>' : '') : '<span class="vf-msg">—</span>'; }
+
+  // Who a pending row waits for: one name, or "N approvers".
+  function waitingFor(r) {
+    var slot = r.designerDecision === 'approved' ? 'ui' : 'designer';
+    var who = slot === 'ui' ? (r.assignedUI || r.notifiedUI) : (r.assignedDesigner || r.notifiedDesigners);
+    var n = String(who || '').split(',').filter(Boolean);
+    return n.length === 1 ? esc(n[0]) : n.length ? n.length + ' ' + AUDIT[slot] + ' approvers' : '<span class="vf-msg">no ' + AUDIT[slot] + ' approver yet</span>';
+  }
+  function branchCell(r) { return stageTag(r) + '<div class="vf-sub">' + targetText(r) + '</div>'; }
+
+  function groupTable(g, rows) {
+    var cols;
+    if (g.key === 'visual') cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell], ['Approver', function (r) { return waitingFor(r) + mailTag(r); }], ['', actionCell]];
+    else if (g.key === 'ui') cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell],
+      ['Visual audit', function (r) { return decidedBy(r.designerDecision, r.designerBy, 'designer'); }], ['Approver', function (r) { return waitingFor(r) + mailTag(r); }], ['', actionCell]];
+    else if (g.key === 'ready') cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell], ['', actionCell]];
+    else if (g.key === 'done') cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell], ['Pushed by', function (r) { return esc(r.pushedBy || '—'); }], ['Version', statusPill]];
+    else cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell], ['Rejected by', function (r) {
+      return r.designerDecision === 'rejected' ? decidedBy('rejected', r.designerBy, 'designer') : r.uiDecision === 'rejected' ? decidedBy('rejected', r.uiBy, 'ui') : '<span class="vf-msg">declined by an admin</span>';
+    }]];
+    return '<div class="vf-card">' +
+      '<div class="vf-card-head"><h4>' + esc(g.title) + '</h4><span class="vf-msg">' + esc(g.hint) + '</span></div>' +
+      (rows.length
+        ? '<table class="vf-table vf-table-simple"><thead><tr>' + cols.map(function (c) { return '<th>' + c[0] + '</th>'; }).join('') + '</tr></thead><tbody>' +
+          rows.map(function (r) {
+            return '<tr class="vf-row' + (r.canReview || r.canPush ? ' vf-row-mine' : '') + (String(r.ROWID) === String(wf.openId) ? ' vf-row-open' : '') + '" data-vf-req="' + esc(r.ROWID) + '" title="Open the request">' +
+              cols.map(function (c, i) { return '<td' + (i === cols.length - 1 && !c[0] ? ' class="vf-cell-action"' : '') + '>' + c[1](r) + '</td>'; }).join('') + '</tr>';
+          }).join('') + '</tbody></table>'
+        : '<div class="vf-empty">Nothing in ' + esc(g.title) + ' right now.</div>') +
+      '</div>';
+  }
+  function iconOnly(r) { return '<b class="vf-icon-name">' + esc(r.iconName) + '</b>'; }
+
+  function renderRequestsList() {
+    if (!wf.requests.length) { $('#wfRequestsList').html('<div class="vf-card"><div class="vf-empty">No requests yet. Request an icon from the Library or the Request Icon page.</div></div>'); return; }
+    var groups = GROUPS.map(function (g) {
+      var rows = wf.requests.filter(g.test);
+      return { g: g, rows: rows, mine: rows.filter(function (r) { return r.canReview || r.canPush; }).length };
+    });
+    // First visit: the tab with work for this person, else the first open step that has requests.
+    if (!wf.reqTab || !groups.some(function (x) { return x.g.key === wf.reqTab; })) {
+      var pick = groups.filter(function (x) { return x.mine; })[0] || groups.filter(function (x) { return x.rows.length && x.g.key !== 'done' && x.g.key !== 'rejected'; })[0] || groups.filter(function (x) { return x.rows.length; })[0];
+      wf.reqTab = (pick || groups[0]).g.key;
+    }
+    var cur = groups.filter(function (x) { return x.g.key === wf.reqTab; })[0];
+    $('#wfRequestsList').html(
+      '<div class="vf-tabs" role="tablist" aria-label="Request steps">' + groups.map(function (x) {
+        var on = x.g.key === wf.reqTab;
+        return '<button type="button" role="tab" class="vf-tab' + (on ? ' is-active' : '') + '" aria-selected="' + on + '" data-vf-tab="' + x.g.key + '">' +
+          esc(x.g.title) + ' <span class="vf-tab-count">' + x.rows.length + '</span>' + (x.mine ? '<span class="vf-tab-dot" title="' + x.mine + ' waiting for you"></span>' : '') + '</button>';
+      }).join('') + '</div>' +
+      groupTable(cur.g, cur.rows));
+  }
+  $(document).on('click', '[data-vf-tab]', function () { wf.reqTab = $(this).data('vf-tab'); renderRequestsList(); });
+
+  // Row buttons: Review opens the approve / reject dialog; Push opens the request with its push buttons.
+  $(document).on('click', '[data-vf-review-open]', function (e) { e.stopPropagation(); openReview(String($(this).data('vf-review-open'))); });
+  $(document).on('click', '[data-vf-open-push]', function (e) {
+    e.stopPropagation();
+    openRequest(String($(this).data('vf-open-push')));
+    setTimeout(function () { var d = $('#wfRequestDetail')[0]; if (d) d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);
+  });
+
+  // ── Review dialog: icon, request, earlier decisions, a note, Approve / Reject ──
+  function ensureReviewModal() {
+    if ($('#wfReviewModal').length) return;
+    $('body').append(
+      '<div class="vf-rvm-overlay hidden" id="wfReviewModal" role="dialog" aria-modal="true" aria-labelledby="wfRvTitle">' +
+        '<div class="vf-rvm">' +
+          '<div class="vf-rvm-head"><b id="wfRvTitle">Review</b><button class="lpp-close" type="button" id="wfRvClose" aria-label="Close">' +
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>' +
+          '<div class="vf-rvm-body" id="wfRvBody"></div>' +
+          '<label class="vf-rvm-label" for="wfRvNote">Note <span class="vf-msg" id="wfRvNoteHint">optional for Approve, required for Reject</span></label>' +
+          '<textarea id="wfRvNote" rows="3" maxlength="500" placeholder="What did you check? Why reject?"></textarea>' +
+          '<div class="vf-rvm-error hidden" id="wfRvError"></div>' +
+          '<div class="vf-rvm-actions">' +
+            '<button class="btn btn-ghost btn-sm" type="button" id="wfRvCancel">Cancel</button>' +
+            '<button class="btn btn-ghost btn-sm vf-btn-reject" type="button" data-vf-rv="reject">Reject</button>' +
+            '<button class="btn btn-primary btn-sm vf-btn-approve" type="button" data-vf-rv="approve">Approve</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>');
+  }
+  function closeReview() { $('#wfReviewModal').addClass('hidden'); wf.review = null; }
+  function openReview(id) {
+    ensureReviewModal();
+    api('GET', 'requests/' + encodeURIComponent(id)).then(function (res) {
+      var r = res.request, slot = res.canReview;
+      if (!slot) { SF.showToast('This request is not waiting for your review any more'); return loadRequests(); }
+      wf.review = { id: r.ROWID, slot: slot, name: r.iconName };
+      var noteOf = function (action) { var ev = (res.events || []).filter(function (e) { return e.action === action; }).pop(); return ev && ev.note ? ev.note : ''; };
+      var visualNote = noteOf('designer_approved');
+      $('#wfRvTitle').text(AUDIT[slot] + ' · ' + r.iconName);
+      $('#wfRvBody').html(
+        '<div class="vf-rv-icon"><img src="' + dataUri(r.svg) + '" alt=""></div>' +
+        '<div class="vf-rv-info">' +
+          '<div><b>' + esc(r.iconName) + '</b> ' + stageTag(r) + '</div>' +
+          '<div class="vf-msg">to ' + esc(branchName(stageOf(r))) + ' · ' + esc(TARGETS[r.targetSprite] || r.targetSprite) + '</div>' +
+          '<div class="vf-msg">requested by ' + esc(r.requestedByName || r.requestedBy) + '</div>' +
+          (r.note ? '<div class="vf-rv-quote"><span class="vf-msg">Requester\'s note</span>' + esc(r.note) + '</div>' : '') +
+          (slot === 'ui' ? '<div class="vf-rv-quote">' + decisionPill('approved', 'designer') + ' <span class="vf-msg">by ' + esc(r.designerBy || '—') + '</span>' + (visualNote ? '<br>' + esc(visualNote) : '') + '</div>' : '') +
+          '<div class="vf-rv-checks vf-msg">' + (slot === 'designer' ? 'Visual audit: shape, grid, stroke, alignment and style match the icon set.'
+            : 'UI audit: size, usage in the product UI and the icon name.') + '</div>' +
+        '</div>');
+      $('#wfRvNote').val(''); $('#wfRvError').addClass('hidden');
+      $('#wfReviewModal').removeClass('hidden');
+      $('#wfRvNote').trigger('focus');
+    }).catch(fail);
+  }
+  $(document).on('click', '#wfRvClose, #wfRvCancel', closeReview);
+  $(document).on('click', '#wfReviewModal', function (e) { if (e.target === this) closeReview(); });
+  $(document).on('keydown', function (e) { if (e.key === 'Escape' && $('#wfReviewModal:not(.hidden)').length) closeReview(); });
+  $(document).on('click', '[data-vf-rv]', function () {
+    var rv = wf.review, decision = $(this).data('vf-rv'), note = $('#wfRvNote').val().trim();
+    if (!rv) return;
+    if (decision === 'reject' && !note) { $('#wfRvError').removeClass('hidden').text('Add a note so the requester knows what to change.'); $('#wfRvNote').trigger('focus'); return; }
+    var $b = $('#wfReviewModal [data-vf-rv]').prop('disabled', true);
+    api('POST', 'requests/' + encodeURIComponent(rv.id) + '/review', { decision: decision, note: note }).then(function (res) {
+      closeReview();
+      var u = res.uiMail;
+      SF.showToast((decision === 'reject' ? 'Rejected ' : 'Approved ') + rv.name + (u ? (u.failed ? ' — UI audit approvers: ' + u.failed + ' mail(s) failed' + (u.error ? ': ' + u.error : '')
+        : u.local ? ' — UI audit approvers listed (mail NOT delivered: no Catalyst credentials)'
+        : u.sent ? ' — mailed ' + u.sent + ' UI audit approver' + (u.sent === 1 ? '' : 's') + ' for the next audit'
+        : ' — no UI audit approvers yet to mail') : ''));
+      if (String(wf.openId) === String(rv.id)) wf.openId = rv.id;
+      return Promise.all([loadRequests(), loadStatuses()]);
+    }).catch(function (e) { $('#wfRvError').removeClass('hidden').text(e.message); }).then(function () { $b.prop('disabled', false); });
+  });
 
   $(document).on('click', '.vf-row', function () { openRequest(String($(this).data('vf-req'))); });
 
@@ -573,9 +707,7 @@
           '<button class="btn btn-primary btn-sm" id="wfAssignBtn" type="button">Assign</button>';
       }
       if (res.canReview) { // this person is in the approver pool for a slot that is still open
-        actions += '<input id="wfReviewNote" type="text" placeholder="Note (optional)">' +
-          '<button class="btn btn-primary btn-sm" data-vf-review="approve" type="button">Approve</button>' +
-          '<button class="btn btn-ghost btn-sm" data-vf-review="reject" type="button" style="color:var(--danger)">Reject</button>';
+        actions += '<button class="btn btn-primary btn-sm" data-vf-review-open="' + esc(r.ROWID) + '" type="button">Review · ' + esc(AUDIT[res.canReview]) + '</button>';
       }
       if (wf.role === 'admin' && r.status === 'pending') {
         actions += '<button class="btn btn-ghost btn-sm vf-pill" id="wfResendBtn" type="button" title="Mail the approvers of every open review again">Resend mail</button>';
@@ -664,18 +796,6 @@
           : mail.some(function (m) { return m.dev; }) ? 'Assigned (mail NOT delivered — no Catalyst credentials; see the server log)'
           : 'Assigned — approval mail sent to ' + mail.map(function (m) { return m.to; }).join(', '));
         return loadRequests();
-      }).catch(fail);
-  });
-
-  $(document).on('click', '[data-vf-review]', function () {
-    api('POST', 'requests/' + wf.open.ROWID + '/review', { decision: $(this).data('vf-review'), note: $('#wfReviewNote').val() })
-      .then(function (res) {
-        var u = res.uiMail;
-        SF.showToast(u ? (u.failed ? 'Saved — UI audit approvers: ' + u.failed + ' mail(s) failed' + (u.error ? ': ' + u.error : '')
-          : u.local ? 'Saved — UI audit approvers listed (mail NOT delivered: no Catalyst credentials)'
-          : u.sent ? 'Saved — mailed ' + u.sent + ' UI audit approver' + (u.sent === 1 ? '' : 's') + ' for the next audit'
-          : 'Saved — no UI audit approvers yet to mail') : 'Review saved');
-        return Promise.all([loadRequests(), loadStatuses()]);
       }).catch(fail);
   });
 
