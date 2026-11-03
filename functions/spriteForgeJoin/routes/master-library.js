@@ -347,24 +347,39 @@ function createMasterLibraryRouter(deps) {
             const user = userOf(req) || { name: "SpriteForge user", email: "" };
             const message = body.message || `Update ${prepared.map((p) => p.meta.name).join(", ")} via SpriteForge (${user.name || user.email})`;
             const writeOpts = { message, authorName: user.name || cfg.authorName, authorEmail: user.email || cfg.authorEmail };
-            if (cfg.npm && cfg.npm.enabled) {
+            let release = null;
+            const external = !!(cfg.npm && cfg.npm.enabled && cfg.npm.mode === "external");
+            if (cfg.npm && cfg.npm.enabled && !external) {
                 // Release: bump <dir>/package.json → npm publish → commit + push (the push only happens after a successful publish).
+                // Deferred mode (the cloud cannot reach the registry): bump + commit + push here; scripts/npm-publisher.js
+                // on a machine inside the office network publishes the committed version a minute later.
                 const pkgPath = path.posix.join(cfg.npm.dir, "package.json");
-                let release = null;
+                const deferred = cfg.npm.mode === "deferred";
                 writeOpts.prepare = async (read) => {
                     const buf = await read(pkgPath);
                     if (!buf) throw Object.assign(new Error(`${pkgPath} was not found on ${cfg.branch}`), { keep: true, status: 409 });
                     const text = buf.toString("utf8");
-                    const taken = await npmRelease.registryVersions(JSON.parse(text).name, cfg.npm);
+                    const taken = deferred ? null : await npmRelease.registryVersions(JSON.parse(text).name, cfg.npm);
                     release = npmRelease.bumpPackageJson(text, cfg.npm, taken);
                     return { files: [{ repoPath: pkgPath, content: Buffer.from(release.text, "utf8") }], message: `${message} [${release.to}]` };
                 };
-                writeOpts.beforePush = (oid, exportDir) => npmRelease.publish(exportDir, cfg.npm, release);
+                if (!deferred) writeOpts.beforePush = (oid, exportDir) => npmRelease.publish(exportDir, cfg.npm, release);
             }
             const repoResult = await withDeadline(client.writeFiles(
                 prepared.map((p) => ({ repoPath: p.meta.repoPath, content: p.buf })),
                 writeOpts
             ), "Commit", cfg.npm && cfg.npm.enabled ? cfg.npm.timeoutMs : undefined);
+
+            // External release: only the icon is committed; npm-publisher bumps + publishes + pushes the version.
+            if (repoResult.changed && external) {
+                repoResult.published = { name: (cache.version && cache.version.name) || null, version: null, from: cache.version && cache.version.version,
+                    registry: cfg.npm.registry, tag: cfg.npm.distTag || cfg.npm.preTag, pending: true, external: true };
+            }
+            // Deferred release: the version is committed; npm-publisher publishes it (status "pending" until then).
+            if (repoResult.changed && release && cfg.npm.mode === "deferred" && !repoResult.published) {
+                repoResult.published = { name: release.name, version: release.to, from: release.from, registry: cfg.npm.registry,
+                    tag: cfg.npm.distTag || cfg.npm.preTag, pending: true };
+            }
 
             // The repository now holds exactly what was pushed — mirror it in the cache.
             const now = new Date().toISOString();
@@ -394,6 +409,8 @@ function createMasterLibraryRouter(deps) {
                 branch: cfg.branch,
                 commitMessage: repoResult.message,
                 release: repoResult.published || null,   // { name, version, from, registry, files, dryRun } when npm publish ran
+                // A branch with a package.json but the release switched off on this server: say so instead of skipping silently.
+                releaseOff: !(cfg.npm && cfg.npm.enabled) && !!cfg.versionFile,
                 pushError: null,
                 ...listing()
             });
@@ -448,6 +465,11 @@ function createMasterLibraryRouter(deps) {
         let tmpWritable = false;
         try { const f = path.join(tmp, `sf-diag-${process.pid}`); fs.writeFileSync(f, "x"); fs.unlinkSync(f); tmpWritable = true; } catch (_) {}
         const reachable = anon.ok || authed.ok;
+        // ?npm=1 → the release step: npm present, registry reachable, token accepted, current dist-tag (no secrets).
+        let release = cfg.npm ? { enabled: !!cfg.npm.enabled, mode: cfg.npm.mode, registry: cfg.npm.registry || null, tokenSet: !!cfg.npm.token, tag: cfg.npm.distTag || cfg.npm.preTag } : null;
+        if (cfg.npm && String(req.query.npm || "") === "1") {
+            release = { mode: cfg.npm.mode, ...(await timed(() => npmRelease.check(cfg.npm, (cache.version && cache.version.name) || "@zohocrm/crm-ui-library"), 90000)) };
+        }
         // ?read=1 → really read the branch with the configured engine (names, sizes and commit only).
         let read = null;
         if (String(req.query.read || "") === "1") {
@@ -467,6 +489,7 @@ function createMasterLibraryRouter(deps) {
             httpsAnonymous: anon,     // expect status 401 (host reachable, auth required)
             httpsWithToken: authed,   // expect status 200 (token accepted)
             read,
+            release,
             lastError: cache.error || null,
             hint: !lookup.ok ? `DNS lookup for ${host} failed on this server — the host is not resolvable from here (internal network only?).`
                 : !reachable ? `${host} resolves but does not answer HTTPS from this server — it is likely only reachable inside the Zoho corporate network.`

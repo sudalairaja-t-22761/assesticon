@@ -41,7 +41,8 @@
   }
   // Timeline action labels for stored actions like designer_approved.
   var ACTION_LABEL = { requested: 'requested (mock)', requested_master: 'requested (master)', pushed: 'pushed',
-    pushed_mock: 'pushed to mock', pushed_master: 'approved + pushed to master', admin_declined: 'declined by admin' };
+    pushed_mock: 'pushed to mock', pushed_master: 'approved + pushed to master', admin_declined: 'declined by admin',
+    npm_published: 'published to npm', npm_publish_failed: 'npm publish failed' };
   function actionLabel(action) {
     var m = /^(designer|ui)_(approved|rejected)$/.exec(action);
     return m ? STAGE[m[1]] + ' ' + m[2] : ACTION_LABEL[action] || action.replace(/_/g, ' ');
@@ -428,8 +429,18 @@
   // Request status in words: an audited request still waits for its push (mock: requester, master: admin).
   function statusPill(r) {
     if (r.status === 'approved') return '<span class="vf-pill vf-pill-pending">' + (stageOf(r) === 'master' ? 'waiting for admin approval' : 'audits passed · push to mock') + '</span>';
-    if (r.status === 'pushed') return '<span class="vf-pill vf-pill-pushed">' + (stageOf(r) === 'master' ? 'on master' : 'on mock') + '</span>';
+    if (r.status === 'pushed') {
+      var on = stageOf(r) === 'master' ? 'on master' : 'on mock', rel = releaseState(r);
+      return '<span class="vf-pill vf-pill-pushed">' + on + (rel === 'published' ? ' · v' + esc(r.releaseVersion) : '') + '</span>' +
+        (rel === 'failed' ? ' <span class="vf-pill vf-pill-rejected" title="' + esc(r.releaseError || '') + '">npm publish failed</span>'
+          : rel === 'pending' ? ' <span class="vf-pill vf-pill-pending" title="The office npm publisher bumps the version, publishes it, then pushes the version">publishing…</span>' : '');
+    }
     return pill(r.status);
+  }
+  // npm release of a pushed request: 'published' | 'failed' | 'pending' (pushed in the last day, no result yet) | ''.
+  function releaseState(r) {
+    if (r.releaseStatus === 'published' || r.releaseStatus === 'failed') return r.releaseStatus;
+    return r.status === 'pushed' && r.pushedAt && Date.now() - new Date(r.pushedAt).getTime() < 864e5 ? 'pending' : '';
   }
   function stageTag(r) { var st = stageOf(r); return '<span class="vf-pill-tag vf-stage-' + st + '">' + (st === 'master' ? 'Master' : 'Mock') + '</span>'; }
   function dataUri(svg) { return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg || ''); }
@@ -542,6 +553,11 @@
     ];
     if (master) steps.push({ label: 'Admin approval', cls: r.status === 'pushed' ? 'done' : declined ? 'rejected' : (r.status === 'approved' ? 'current' : '') });
     steps.push({ label: master ? 'Pushed to master' : 'Pushed to mock', cls: r.status === 'pushed' ? 'done' : (!master && r.status === 'approved' ? 'current' : '') });
+    var rel = releaseState(r);
+    if (rel || r.status !== 'pushed') {
+      steps.push({ label: rel === 'published' ? 'Published v' + r.releaseVersion : rel === 'failed' ? 'npm publish failed' : 'Published to npm',
+        cls: rel === 'published' ? 'done' : rel === 'failed' ? 'rejected' : rel === 'pending' ? 'current' : '' });
+    }
     return '<div class="vf-steps">' + steps.map(function (s) { return '<div class="vf-step ' + s.cls + '">' + s.label + '</div>'; }).join('') + '</div>';
   }
 
@@ -666,7 +682,7 @@
   // Push: add the single icon to the chosen sprite of the request's branch (mock or master), then record it.
   $(document).on('click', '#wfPushBtn', function () {
     var r = wf.open, stage = stageOf(r), $btn = $(this).prop('disabled', true);
-    var file = r.targetSprite + '.svg', pushedVersion = null, alreadyThere = false;
+    var file = r.targetSprite + '.svg', pushedVersion = null, alreadyThere = false, releaseOff = false, releasePending = false, releaseExternal = false;
     var done = function () { $btn.prop('disabled', false); };
     var icon = { symbolId: r.symbolId, sprite: r.sprite }, drawing = '', replaceId = '';
     // Compare first: same drawing already there → just record it; same name with another drawing → replace that icon.
@@ -711,12 +727,18 @@
       if (out && !out.alreadyThere && typeof SF.setLibraryVersion === 'function') SF.setLibraryVersion(out, stage);
       pushedVersion = out && out.release ? out.release.version : null;
       alreadyThere = !!(out && out.alreadyThere);
+      releaseOff = !!(out && out.releaseOff);
+      releasePending = !!(out && out.release && out.release.pending);
+      releaseExternal = !!(out && out.release && out.release.external);
       return api('POST', 'requests/' + r.ROWID + '/push', { commitSha: (out && out.commit) || '', version: pushedVersion || '', alreadyThere: alreadyThere, drawing: drawing })
         .then(function () { return out; });
     }).then(function (out) {
       var on = ' on the ' + BRANCH_LABEL[stage].toLowerCase();
       SF.showToast((alreadyThere ? 'The same icon is already' + on + (out && out.as && normId(out.as) !== normId(r.symbolId) ? ' as ' + out.as : '') + ' — recorded'
-        : (replaceId ? 'Replaced ' + replaceId + ' in ' : 'Pushed to ') + file + on) + (pushedVersion ? ' · published ' + pushedVersion : ''));
+        : (replaceId ? 'Replaced ' + replaceId + ' in ' : 'Pushed to ') + file + on) +
+        (releaseExternal ? ' · the office npm publisher now bumps the version, publishes it and pushes the version (admins get a mail)'
+          : pushedVersion ? (releasePending ? ' · version ' + pushedVersion + ' committed — the office npm publisher publishes it within a minute' : ' · published ' + pushedVersion) : '') +
+        (releaseOff ? ' · no version bump / npm publish: the release is switched off on this server (REPO_NPM_PUBLISH)' : ''));
       resetRepoIds();
       return Promise.all([loadRequests(), loadStatuses()]);
     }).catch(function (e) { if (!e || !e.cancelled) fail(e); }).then(done);

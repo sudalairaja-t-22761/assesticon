@@ -85,7 +85,7 @@ const MASTER_DEFAULTS = {
 };
 // Keys MASTER_REPO_* falls back to REPO_* for (same repository, token and registry). Branch, tags and commit users stay its own.
 const SHARED_KEYS = ["BASE_URL", "PROJECT_PATH", "NAME", "GIT_URL", "GIT_HOST", "TOKEN", "TOKEN_USER", "PROVIDER", "FILES", "SPRITE_PAIRS",
-    "VERSION_FILE", "NPM_PUBLISH", "NPM_DIR", "NPM_REGISTRY", "NPM_TOKEN", "NPM_TIMEOUT_MS", "NPM_DRY_RUN", "VERSION_MAX",
+    "VERSION_FILE", "NPM_PUBLISH", "NPM_PUBLISH_MODE", "NPM_DIR", "NPM_REGISTRY", "NPM_TOKEN", "NPM_TIMEOUT_MS", "NPM_DRY_RUN", "VERSION_MAX",
     "COMMIT_AUTHOR_NAME", "COMMIT_AUTHOR_EMAIL", "HTTP_TIMEOUT_MS", "REQUEST_TIMEOUT_MS", "WEB_BLOB_URL", "WEB_BRANCH_URL"];
 
 function load(opts) {
@@ -117,6 +117,10 @@ function load(opts) {
         preTag:   get("VERSION_TAG", D.versionTag || "icontool"),
         preMax:   Math.max(1, parseInt(get("VERSION_MAX", "5"), 10) || 5),
         dryRun:   getBool("NPM_DRY_RUN", false),
+        // "direct": bump + npm publish here before the push. "deferred": bump + commit here, publish elsewhere.
+        // "external": nothing here — scripts/npm-publisher.js on a machine inside the office network bumps the version,
+        // publishes, and pushes the version commit only after a successful publish (the cloud cannot reach cm-npmregistry).
+        mode:     (["deferred", "external"].includes(get("NPM_PUBLISH_MODE", "direct").toLowerCase()) ? get("NPM_PUBLISH_MODE", "direct").toLowerCase() : "direct"),
         timeoutMs: Math.max(30000, parseInt(get("NPM_TIMEOUT_MS", "240000"), 10) || 240000)
     };
     const assetsDir   = get("ASSETS_DIR", D.assetsDir !== undefined ? D.assetsDir : "").replace(/^\/+|\/+$/g, "");

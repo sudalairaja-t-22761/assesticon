@@ -100,4 +100,36 @@ function approvalMail(req, { role, request }) {
     return { subject, html, text };
 }
 
-module.exports = { sendMail, approvalMail };
+/**
+ * npm release report for admins. r: { status: "published" | "failed", name, version, tag, branch, commit, subject, error }
+ */
+function releaseMail(r) {
+    const failed = r.status === "failed";
+    const ver = r.version ? `${r.name}@${r.version}` : r.name;
+    const install = `npm i ${r.name}@${r.version}`;
+    const subject = failed ? `npm publish FAILED: ${ver} (${r.tag || r.branch})` : `Published ${ver} (${r.tag})`;
+    const row = (k, v) => `<tr><td style="padding:6px 16px 6px 0;color:#6b7280;font-size:13px;white-space:nowrap">${k}</td><td style="padding:6px 0;font-size:14px;color:#111827">${v}</td></tr>`;
+    const html =
+        `<div style="background:#f3f4f6;padding:24px 12px;font-family:Segoe UI,Arial,sans-serif">` +
+        `<table role="presentation" align="center" width="100%" style="max-width:560px;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e5e7eb">` +
+        `<tr><td style="background:${failed ? "#E3204F" : "#12AA67"};padding:18px 24px;color:#ffffff;font-size:16px;font-weight:600">` +
+          `${failed ? "npm publish failed" : "New icon library version published"}</td></tr>` +
+        `<tr><td style="padding:24px"><table role="presentation" style="border-collapse:collapse;margin-bottom:18px">` +
+        row("Package", esc(r.name)) + (r.version ? row("Version", `<b>${esc(r.version)}</b>`) : "") + (r.tag ? row("npm tag", esc(r.tag)) : "") +
+        row("Branch", esc(r.branch)) + (r.commit ? row("Commit", esc(String(r.commit).slice(0, 8)) + (r.subject ? " · " + esc(r.subject) : "")) : "") +
+        `</table>` +
+        (failed
+            ? `<div style="font-size:13px;color:#6b7280;margin-bottom:6px">Error</div>` +
+              `<code style="display:block;background:#FCE8E6;border-radius:6px;padding:10px 12px;font-size:13px;color:#8a1c1c;white-space:pre-wrap;word-break:break-word">${esc(r.error || "unknown error")}</code>` +
+              `<p style="margin:14px 0 0;font-size:13px;color:#374151">The publisher retries every minute; you get one more mail when it succeeds. Common causes: the Mac running <b>npm run publisher</b> is off the office network / VPN, or the npm login in ~/.npmrc expired (run <b>npm login</b>).</p>`
+            : `<div style="font-size:13px;color:#6b7280;margin-bottom:6px">Install</div>` +
+              `<code style="display:block;background:#f3f4f6;border-radius:6px;padding:10px 12px;font-size:13px;color:#111827">${esc(install)}</code>`) +
+        `</td></tr><tr><td style="padding:14px 24px;background:#f9fafb;color:#9ca3af;font-size:12px">You received this because you are an admin of the Icon Assets tool.</td></tr>` +
+        `</table></div>`;
+    const text = (failed ? `npm publish FAILED for ${ver} (${r.branch}).\n` : `${ver} was published to npm (tag ${r.tag}) from ${r.branch}.\n`) +
+        (r.commit ? `Commit ${String(r.commit).slice(0, 8)}${r.subject ? ": " + r.subject : ""}\n` : "") +
+        (failed ? `\nError: ${r.error || "unknown error"}\nThe publisher retries every minute.\n` : `\nInstall: ${install}\n`);
+    return { subject, html, text };
+}
+
+module.exports = { sendMail, approvalMail, releaseMail };

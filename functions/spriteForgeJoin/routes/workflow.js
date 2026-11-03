@@ -21,6 +21,10 @@
  *   PATCH  /api/icon-categories/:id     → { name?, options? }                                                       [admin]
  *   DELETE /api/icon-categories/:id     → not the built-in Stroke icons category                                    [admin]
  *   PUT    /api/icon-categories/:id/icons → { names[], enabled }  add / remove icons                                [admin]
+ *   POST   /api/release/published       → { status: published|failed, name, version, tag, branch, commit?, subject?, error?, commits[]? }
+ *                                         commits = the icon commits in that release: their requests get the result in the timeline
+ *                                         mail every admin (+ RELEASE_NOTIFY_EMAILS) the publish result. Called by
+ *                                         scripts/npm-publisher.js; header x-release-token = RELEASE_NOTIFY_TOKEN
  *   POST   /api/requests                → { symbolId, iconName, svg, targetSprite, note, stage?, inMock? }; the Visual audit approvers are mailed first
  *                                         stage "mock" (default): an unverified icon; stage "master": a mock verified icon
  *   GET    /api/requests                → admins see all; others see requested-by-me + assigned-to-me
@@ -44,7 +48,8 @@
 const express = require("express");
 const store = require("../lib/store");
 const orgUsers = require("../lib/org-users");
-const { sendMail, approvalMail } = require("../lib/mailer");
+const { sendMail, approvalMail, releaseMail } = require("../lib/mailer");
+const crypto = require("crypto");
 const { MENUS, MENU_KEYS, loadRoles, syncRoleRows, setRoleMenu, setRoleMenus, createRole, renameRole, deleteRole, getAccess, requireRole, norm, slug, menuList, isExpired, approverOf, BUILTIN } = require("../lib/roles");
 
 // ALLOW_SELF_APPROVAL=true lets a requester who is also an approver review (and be mailed about) their own request.
@@ -387,6 +392,52 @@ function createWorkflowRouter({ requireSession }) {
         res.json({ success: true, statuses: rows.map((r) => ({ symbolId: r.symbolId, sprite: r.sprite, status: r.status, drawing: r.drawing || "" })) });
     }));
 
+    // ── release published (from scripts/npm-publisher.js, which runs inside the office network) ──
+    // No session: the publisher authenticates with the shared RELEASE_NOTIFY_TOKEN instead.
+    router.post("/release/published", wrap(async (req, res) => {
+        const want = String(process.env.RELEASE_NOTIFY_TOKEN || "");
+        const got = String(req.headers["x-release-token"] || "");
+        if (want.length < 24) return res.status(503).json({ success: false, message: "RELEASE_NOTIFY_TOKEN is not set on the server" });
+        if (got.length !== want.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want))) {
+            return res.status(401).json({ success: false, message: "Invalid release token" });
+        }
+        const b = req.body || {};
+        const status = b.status === "failed" ? "failed" : "published";
+        const r = { status, name: str(b.name, 120), version: str(b.version, 60), tag: str(b.tag, 40), branch: str(b.branch, 120),
+            commit: str(b.commit, 64), subject: str(b.subject, 300), error: str(b.error, 1500) };
+        const validVersion = /^\d+\.\d+\.\d+(-[\w.-]+)?$/.test(r.version);
+        // A failure may come before the version is known (e.g. the branch could not be read).
+        if (!r.name || !r.branch || (status === "published" ? !validVersion : r.version && !validVersion)) {
+            return res.status(400).json({ success: false, message: "name, branch and a valid version are required" });
+        }
+        // Every admin (ADMIN_EMAILS + members with the Admin role whose access has not expired) + RELEASE_NOTIFY_EMAILS.
+        const members = await store.forRequest(req).all("members");
+        const admins = [...new Set(String(process.env.ADMIN_EMAILS || "").split(",")
+            .concat(String(process.env.RELEASE_NOTIFY_EMAILS || "").split(",")).map(norm)
+            .concat(members.filter((m) => m.memberType === "admin" && !isExpired(m)).map((m) => norm(m.userEmail))).filter(Boolean))];
+        const msg = releaseMail(r), sent = [], failed = [];
+        for (const to of admins) {
+            const out = await sendMail(req, { to, subject: msg.subject, html: msg.html, text: msg.text });
+            (out.ok ? sent : failed).push(out.ok ? to : { to, error: out.error });
+        }
+        console.log(`[release] ${r.name}@${r.version || "?"} (${r.tag}) ${status} on ${r.branch}: mailed ${sent.length} admin(s)${failed.length ? ", failed " + failed.length : ""}`);
+        // The pushed requests whose icon commit is in this release: record the result on the request + its timeline.
+        const commits = (Array.isArray(b.commits) ? b.commits : []).map((c) => str(c, 64).toLowerCase()).filter((c) => /^[0-9a-f]{7,64}$/.test(c));
+        let requests = 0;
+        if (commits.length) {
+            const db = store.forRequest(req);
+            const inRelease = (sha) => { const s = String(sha || "").toLowerCase(); return s.length >= 7 && commits.some((c) => c.startsWith(s) || s.startsWith(c)); };
+            for (const q of (await db.all("icon_requests")).filter((x) => x.status === "pushed" && inRelease(x.pushCommitSha))) {
+                if (status === "published" && q.releaseStatus === "published") continue; // already recorded
+                await db.update("icon_requests", q.ROWID, { releaseStatus: status, releaseVersion: r.version, releaseTag: r.tag, releaseError: status === "failed" ? r.error.slice(0, 500) : "" });
+                await db.insert("request_events", { requestId: String(q.ROWID), actor: "npm publisher", action: status === "published" ? "npm_published" : "npm_publish_failed",
+                    note: status === "published" ? `${r.name}@${r.version} · tag ${r.tag}` : `${r.version || "version not set"}: ${r.error.slice(0, 400)}` });
+                requests++;
+            }
+        }
+        res.json({ success: true, sent: sent.length, failed, requests, local: !(req.headers["x-zc-projectid"] || req.headers["x-zc-admin-cred-token"]) });
+    }));
+
     // ── icon categories (filter chips; Size + Stroke width in the Library preview) ──
     const cats = require("../lib/icon-options");
     // Validation errors from lib/icon-options carry a status; anything else is a 500 from wrap().
@@ -647,7 +698,8 @@ function createWorkflowRouter({ requireSession }) {
                 ? "Only an admin can approve and push to the master branch" : "Only the requester (or an admin) can push this icon to the mock branch" });
         }
         const master = stageOf(r) === "master";
-        const saved = await db.update("icon_requests", r.ROWID, { status: "pushed", pushCommitSha: str(req.body.commitSha, 80), pushedBy: me(req).email || "" });
+        const saved = await db.update("icon_requests", r.ROWID, { status: "pushed", pushCommitSha: str(req.body.commitSha, 80), pushedBy: me(req).email || "", pushedAt: new Date().toISOString(),
+            releaseStatus: "", releaseVersion: "", releaseError: "" });
         await setIconStatus(db, r.symbolId, r.sprite, master ? "master_verified" : "mock_verified", req, req.body.drawing);
         await logEvent(db, r.ROWID, req, master ? "pushed_master" : "pushed_mock",
             `to ${r.targetSprite}${req.body.version ? " · published " + str(req.body.version, 60) : ""}${req.body.alreadyThere ? " (already in the sprite)" : ""}`);

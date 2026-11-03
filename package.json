@@ -9,7 +9,8 @@
     "build:client": "node scripts/build-client.js",
     "deploy": "npm run build:client && catalyst deploy --only functions:spriteForgeJoin,client",
     "dev:append": "FORCE_LOCAL_ENV=true node --watch functions/spriteAppend/index.js",
-    "deploy:append": "catalyst deploy --only functions:spriteAppend"
+    "deploy:append": "catalyst deploy --only functions:spriteAppend",
+    "publisher": "node scripts/npm-publisher.js"
   },
   "engines": {
     "node": ">=18"
