@@ -178,6 +178,223 @@
     art.appendChild(marks);
   }
 
+
+  // ── Point editing: click a path (Paths view) to pin it, then drag its points ───────────────
+  // Path data is read into absolute segments; a dragged point is written back into the Source on release.
+  var ROUND = function (n) { return +(+n).toFixed(3); };
+  function parsePath(d) {
+    var str = String(d || ''), pos = 0, segs = [], cx = 0, cy = 0, sx = 0, sy = 0, cmd = '';
+    var ARGS = { M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7, Z: 0 };
+    var NUM = /[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/y;
+    var skip = function () { while (pos < str.length && /[\s,]/.test(str[pos])) pos++; };
+    var number = function () { skip(); NUM.lastIndex = pos; var m = NUM.exec(str); if (!m) return NaN; pos = NUM.lastIndex; return parseFloat(m[0]); };
+    var flag = function () { skip(); var ch = str[pos]; if (ch !== '0' && ch !== '1') return NaN; pos++; return +ch; }; // arc flags may be written "011"
+    for (;;) {
+      skip();
+      if (pos >= str.length) break;
+      if (/[a-zA-Z]/.test(str[pos])) cmd = str[pos++];
+      else if (!cmd) return null;
+      var up = cmd.toUpperCase(), rel = cmd !== up, n = ARGS[up];
+      if (n === undefined) return null;
+      if (up === 'Z') { segs.push({ c: 'Z', p: [] }); cx = sx; cy = sy; cmd = ''; continue; }
+      var a = [];
+      for (var k = 0; k < n; k++) a.push(up === 'A' && (k === 3 || k === 4) ? flag() : number());
+      if (a.some(isNaN)) return null;
+      var ox = rel ? cx : 0, oy = rel ? cy : 0, seg;
+      if (up === 'H') seg = { c: 'L', p: [a[0] + ox, cy] };
+      else if (up === 'V') seg = { c: 'L', p: [cx, a[0] + oy] };
+      else if (up === 'A') seg = { c: 'A', p: [a[0], a[1], a[2], a[3], a[4], a[5] + ox, a[6] + oy] };
+      else seg = { c: up, p: a.map(function (v, j) { return v + (j % 2 ? oy : ox); }) };
+      segs.push(seg);
+      cx = seg.p[seg.p.length - 2]; cy = seg.p[seg.p.length - 1];
+      if (up === 'M') { sx = cx; sy = cy; cmd = rel ? 'l' : 'L'; } // extra pairs after M are lines
+    }
+    return segs;
+  }
+  function pathString(segs) {
+    return segs.map(function (g) { return g.c + (g.p.length ? g.p.map(ROUND).join(' ') : ''); }).join(' ');
+  }
+  // Draggable points of one element: [{ x, y, kind: 'anchor' | 'ctrl', move(x, y), links: [[x,y] of the anchor] }] + attrs()
+  function editModel(el) {
+    var tag = el.tagName.toLowerCase(), num = function (a) { return parseFloat(el.getAttribute(a)) || 0; }, pts = [];
+    if (tag === 'path') {
+      var segs = parsePath(el.getAttribute('d'));
+      if (!segs) return null;
+      segs.forEach(function (g, si) {
+        var P = g.p, end = P.length - 2;
+        var at = function (j, kind) { pts.push({ kind: kind, get: function () { return [P[j], P[j + 1]]; }, set: function (x, y) { P[j] = x; P[j + 1] = y; }, seg: si, j: j }); };
+        if (g.c === 'C') { at(0, 'ctrl'); at(2, 'ctrl'); }
+        if (g.c === 'S' || g.c === 'Q') at(0, 'ctrl');
+        if (g.c !== 'Z') at(end, 'anchor');
+      });
+      // An anchor drags the control points that belong to it (the curve in and the next curve out) along.
+      pts.forEach(function (p) {
+        if (p.kind !== 'anchor') return;
+        var g = segs[p.seg], next = segs[p.seg + 1], tied = [];
+        if (g.c === 'C') tied.push([g.p, 2]); if (g.c === 'S') tied.push([g.p, 0]);
+        if (next && next.c === 'C') tied.push([next.p, 0]);
+        p.tied = tied;
+      });
+      // A closed shape that ends on its start point: both anchors are one point (one handle, moved together).
+      var anchors = pts.filter(function (p) { return p.kind === 'anchor'; });
+      anchors.forEach(function (p) {
+        if (segs[p.seg].c !== 'M') return;
+        var k = p.seg + 1;
+        while (k < segs.length && segs[k].c !== 'M' && segs[k].c !== 'Z') k++;
+        var last = anchors.filter(function (q) { return q.seg === k - 1 && q !== p; })[0];
+        if (!last || segs[k] === undefined || segs[k].c !== 'Z') return;
+        var a = p.get(), b = last.get();
+        if (Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6) { p.twin = last; last.hidden = true; }
+      });
+      pts.forEach(function (p) { // a control point's line goes to the anchor it shapes
+        if (p.kind !== 'ctrl') return;
+        var g = segs[p.seg], prev = segs[p.seg - 1];
+        p.line = (g.c === 'C' && p.j === 0 && prev) ? function () { return [prev.p[prev.p.length - 2], prev.p[prev.p.length - 1]]; }
+          : function () { return [g.p[g.p.length - 2], g.p[g.p.length - 1]]; };
+      });
+      return { pts: pts, attrs: function () { return { d: pathString(segs) }; } };
+    }
+    var pair = function (ax, ay) { var v = { x: num(ax), y: num(ay) }; pts.push({ kind: 'anchor', get: function () { return [v.x, v.y]; }, set: function (x, y) { v.x = x; v.y = y; } }); return v; };
+    if (tag === 'line') {
+      var a = pair('x1', 'y1'), b = pair('x2', 'y2');
+      return { pts: pts, attrs: function () { return { x1: ROUND(a.x), y1: ROUND(a.y), x2: ROUND(b.x), y2: ROUND(b.y) }; } };
+    }
+    if (tag === 'circle' || tag === 'ellipse') {
+      var c = pair('cx', 'cy');
+      return { pts: pts, attrs: function () { return { cx: ROUND(c.x), cy: ROUND(c.y) }; } };
+    }
+    if (tag === 'rect') {
+      var x = num('x'), y = num('y'), w = num('width'), h = num('height');
+      var tl = { x: x, y: y }, br = { x: x + w, y: y + h };
+      pts.push({ kind: 'anchor', get: function () { return [tl.x, tl.y]; }, set: function (nx, ny) { tl.x = nx; tl.y = ny; } });
+      pts.push({ kind: 'anchor', get: function () { return [br.x, br.y]; }, set: function (nx, ny) { br.x = nx; br.y = ny; } });
+      return { pts: pts, attrs: function () {
+        return { x: ROUND(Math.min(tl.x, br.x)), y: ROUND(Math.min(tl.y, br.y)), width: ROUND(Math.abs(br.x - tl.x)), height: ROUND(Math.abs(br.y - tl.y)) };
+      } };
+    }
+    if (tag === 'polyline' || tag === 'polygon') {
+      var nums = (el.getAttribute('points') || '').match(/[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g) || [], list = [];
+      for (var q = 0; q + 1 < nums.length; q += 2) list.push([+nums[q], +nums[q + 1]]);
+      list.forEach(function (v) { pts.push({ kind: 'anchor', get: function () { return v; }, set: function (nx, ny) { v[0] = nx; v[1] = ny; } }); });
+      return { pts: pts, attrs: function () { return { points: list.map(function (v) { return ROUND(v[0]) + ',' + ROUND(v[1]); }).join(' ') }; } };
+    }
+    return null;
+  }
+
+  var edit = null; // { el, art, model, drag: { pt, start } }
+  // Handles of the pinned element, in the art's own coordinates.
+  function drawHandles(root) {
+    var art = root && root.querySelector('.lps-art'), old = art && art.querySelector('.lps-handles');
+    if (old) old.remove();
+    edit = null;
+    if (!art || !studio.paths || studio.pin < 0) return;
+    var el = art.querySelectorAll(SHAPES)[studio.pin];
+    var model = el && editModel(el);
+    if (!model || !model.pts.length) return;
+    edit = { el: el, art: art, model: model, drag: null };
+    var ns = art.namespaceURI, g = document.createElementNS(ns, 'g');
+    g.setAttribute('class', 'lps-handles');
+    art.appendChild(g);
+    placeHandles();
+  }
+  function toArt(x, y) {
+    var m = edit.art.getScreenCTM().inverse().multiply(edit.el.getScreenCTM()), pt = edit.art.createSVGPoint();
+    pt.x = x; pt.y = y;
+    return pt.matrixTransform(m);
+  }
+  // Draw the handles once; while dragging only their positions change (a re-created handle would lose the pointer).
+  function placeHandles() {
+    var g = edit && edit.art.querySelector('.lps-handles');
+    if (!g) return;
+    var vb = edit.art.viewBox.baseVal, r = Math.max(vb.width, vb.height) * 0.02, ns = edit.art.namespaceURI;
+    var set = function (e, attrs) { Object.keys(attrs).forEach(function (k) { e.setAttribute(k, attrs[k]); }); return e; };
+    if (!g.childNodes.length) {
+      edit.model.pts.forEach(function (p) {
+        if (p.kind === 'ctrl' && p.line) g.appendChild(set(document.createElementNS(ns, 'line'), { 'class': 'lps-handle-line' }));
+      });
+      edit.model.pts.forEach(function (p, i) {
+        g.appendChild(set(document.createElementNS(ns, p.kind === 'ctrl' ? 'rect' : 'circle'),
+          { 'class': 'lps-handle' + (p.kind === 'ctrl' ? ' lps-handle-ctrl' : ''), 'data-h': i }));
+      });
+    }
+    var lines = g.querySelectorAll('.lps-handle-line'), li = 0;
+    edit.model.pts.forEach(function (p) {
+      if (p.kind !== 'ctrl' || !p.line) return;
+      var a = toArt.apply(null, p.line()), b = toArt.apply(null, p.get());
+      set(lines[li++], { x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    });
+    edit.model.pts.forEach(function (p, i) {
+      var c = toArt.apply(null, p.get()), h = g.querySelector('[data-h="' + i + '"]');
+      if (p.hidden) { h.setAttribute('display', 'none'); return; }
+      if (p.kind === 'ctrl') set(h, { x: c.x - r * 0.75, y: c.y - r * 0.75, width: r * 1.5, height: r * 1.5 });
+      else set(h, { cx: c.x, cy: c.y, r: r });
+    });
+  }
+  function pointerLocal(e) {
+    var pt = edit.art.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    return pt.matrixTransform(edit.el.getScreenCTM().inverse());
+  }
+  function startDrag(e) {
+    var h = e.target.closest && e.target.closest('[data-h]');
+    if (!h || !edit) return;
+    e.preventDefault(); e.stopPropagation();
+    var p = edit.model.pts[+h.getAttribute('data-h')], loc = pointerLocal(e), at = p.get();
+    edit.drag = { p: p, dx: at[0] - loc.x, dy: at[1] - loc.y, moved: false, last: at.slice() };
+    try { h.setPointerCapture(e.pointerId); } catch (_) { /* older browsers */ }
+    // Follow the pointer anywhere on the page until it is released (even outside the preview).
+    window.addEventListener('pointermove', moveDrag);
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+  }
+  function moveDrag(e) {
+    if (!edit || !edit.drag) return;
+    try { moveDragNow(e); } catch (err) { console.error('[studio] drag:', err); }
+  }
+  function moveDragNow(e) {
+    var d = edit.drag, loc = pointerLocal(e), nx = loc.x + d.dx, ny = loc.y + d.dy, ox = nx - d.last[0], oy = ny - d.last[1];
+    d.p.set(nx, ny);
+    (d.p.tied || []).forEach(function (t) { t[0][t[1]] += ox; t[0][t[1] + 1] += oy; }); // its curve handles come along
+    if (d.p.twin) { // the closing point of the same shape
+      d.p.twin.set(nx, ny);
+      (d.p.twin.tied || []).forEach(function (t) { t[0][t[1]] += ox; t[0][t[1] + 1] += oy; });
+    }
+    d.last = [nx, ny]; d.moved = true;
+    var attrs = edit.model.attrs();
+    Object.keys(attrs).forEach(function (k) { edit.el.setAttribute(k, attrs[k]); });
+    placeHandles();
+  }
+  function endDrag() {
+    window.removeEventListener('pointermove', moveDrag);
+    window.removeEventListener('pointerup', endDrag);
+    window.removeEventListener('pointercancel', endDrag);
+    if (!edit || !edit.drag) return;
+    var moved = edit.drag.moved, attrs = edit.model.attrs();
+    edit.drag = null;
+    if (moved) { try { setSourceAttrs(studio.pin, attrs); } catch (err) { console.error('[studio] save point edit:', err); toast('Could not save the change: ' + err.message); } }
+  }
+  // Write the attributes of element #i into the Source (one undo step), then redraw everything from it.
+  function setSourceAttrs(i, attrs) {
+    var parsed = parseXml(studio.source);
+    if (parsed.error) { toast('The Source is not valid SVG, so the change was not saved'); return; }
+    var el = parsed.doc.querySelectorAll(SHAPES)[i];
+    if (!el) return;
+    pushUndo();
+    Object.keys(attrs).forEach(function (k) { el.setAttribute(k, attrs[k]); });
+    studio.source = formatSvg(new XMLSerializer().serializeToString(parsed.doc.documentElement), false);
+    studio.error = '';
+    render();
+    if (studio.editing) $('#lpsEditor').val(studio.source);
+  }
+  function pushUndo() { studio.undo = (studio.undo || []).concat([studio.source]).slice(-50); }
+  function undo() {
+    if (!studio.undo || !studio.undo.length) return;
+    studio.source = studio.undo.pop();
+    studio.error = '';
+    render();
+    if (studio.editing) $('#lpsEditor').val(studio.source);
+  }
+
   // ── markup ────────────────────────────────────────────────────────────────
   var ICON = {
     reset: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
@@ -279,7 +496,11 @@
     '.lps-paths .lps-el-fill{fill:var(--c)!important;fill-opacity:.8}' +
     '.lps-paths .lps-el-stroke.lps-el-fill{fill-opacity:.35}' +
     '.lps-mark{fill:var(--bg-panel,#fff);stroke:var(--c);stroke-width:2;vector-effect:non-scaling-stroke;cursor:pointer}' +
-    '.has-hot .lps-el:not(.is-hot),.has-hot .lps-mark:not(.is-hot){opacity:.18}';
+    '.has-hot .lps-el:not(.is-hot),.has-hot .lps-mark:not(.is-hot){opacity:.18}' +
+    '.lps-handles .lps-handle{fill:#fff;stroke:#2C83EC;stroke-width:2;vector-effect:non-scaling-stroke;cursor:grab;touch-action:none}' +
+    '.lps-handles .lps-handle:hover{fill:#2C83EC}.lps-handles .lps-handle-ctrl{fill:#2C83EC;stroke:#fff}' +
+    '.lps-handles .lps-handle-line{stroke:#2C83EC;stroke-width:1;stroke-dasharray:3 2;vector-effect:non-scaling-stroke;pointer-events:none}' +
+    '.wrap.is-dragging,.wrap.is-dragging .lps-handle{cursor:grabbing}';
   function stageRoot() {
     var stage = $('#lpsStage')[0];
     if (!stage) return null;
@@ -288,6 +509,8 @@
     // Events inside a shadow root reach the page re-targeted to the stage, so listen here.
     root.addEventListener('mouseover', function (e) { var t = e.target.closest && e.target.closest('[data-i]'); if (t && studio.paths) setHot(+t.getAttribute('data-i')); });
     root.addEventListener('click', function (e) { var t = e.target.closest && e.target.closest('[data-i]'); if (t) pin(+t.getAttribute('data-i'), true); });
+    // Point editing (handles of the pinned element)
+    root.addEventListener('pointerdown', startDrag);
     return root;
   }
 
@@ -298,8 +521,11 @@
       (studio.grid ? gridSvg(out.vb) : '') + scalable(out.svg) + '</div>';
     var art = root.querySelector('.lps-art');
     if (art) decorate(art, out.vb);
-    $('#lpsTip').toggleClass('hidden', !studio.paths);
+    $('#lpsTip').toggleClass('hidden', !studio.paths).text(studio.pin >= 0
+      ? 'Drag the points to change this path · Cmd/Ctrl+Z undoes · click the path again to unpin it.'
+      : 'Hover a path to find it in the source · click a path to edit its points.');
     setHot(studio.pin);
+    drawHandles(root);
   }
 
   function renderSizes(out) {
@@ -326,6 +552,7 @@
     var src = studio.tab === 'source';
     $('#lpsTabActions').html(src
       ? (studio.editing ? '<button type="button" class="btn btn-primary btn-sm" id="lpsEditDone">Done</button>' : '<button type="button" class="btn btn-ghost btn-sm" id="lpsEdit">Edit</button>') +
+        (studio.undo && studio.undo.length ? '<button type="button" class="btn btn-ghost btn-sm" id="lpsUndo" title="Undo the last change (Cmd/Ctrl+Z)">Undo</button>' : '') +
         (studio.source !== studio.original ? '<button type="button" class="btn btn-ghost btn-sm" id="lpsRevert" title="Back to the icon from the library">Revert</button>' : '') +
         '<button type="button" class="lpp-close" id="lpsCopySrc" title="Copy source" aria-label="Copy source">' + ICON.copy + '</button>'
       : '');
@@ -368,7 +595,7 @@
     if (!icon || !icon.svgContent) { toast('This icon has no SVG to edit'); return; }
     ensureStudio();
     if (studio.iconId !== icon.id) {
-      studio.iconId = icon.id; studio.original = studio.source = initialSource(icon);
+      studio.iconId = icon.id; studio.original = studio.source = initialSource(icon); studio.undo = [];
       studio.error = ''; studio.pin = -1; studio.editing = false;
     }
     if (!studio.touched) { studio.colorKey = P.colorKey(); studio.color = P.colorOf(studio.colorKey).hex; }
@@ -426,6 +653,9 @@
     if (!studio.paths) return;
     studio.pin = studio.pin === i ? -1 : i;
     setHot(studio.pin);
+    drawHandles(stageRoot());
+    $('#lpsTip').text(studio.pin >= 0 ? 'Drag the points to change this path · Cmd/Ctrl+Z undoes · click the path again to unpin it.'
+      : 'Hover a path to find it in the source · click a path to edit its points.');
     if (studio.pin >= 0 && fromStage) {
       var el = $('#lpsSrc .lps-src-el[data-i="' + i + '"]')[0];
       if (el) el.scrollIntoView({ block: 'nearest' });
@@ -438,7 +668,14 @@
   $(document).on('click', '.lps-tab', function () { studio.tab = $(this).data('tab'); render(); });
   $(document).on('click', '#lpsEdit', function () { studio.editing = true; render(); $('#lpsEditor').trigger('focus'); });
   $(document).on('click', '#lpsEditDone', function () { studio.editing = false; render(); });
-  $(document).on('click', '#lpsRevert', function () { studio.source = studio.original; studio.error = ''; studio.pin = -1; render(); if (studio.editing) $('#lpsEditor').val(studio.source); });
+  $(document).on('click', '#lpsUndo', undo);
+  // Cmd/Ctrl+Z in the studio undoes a point edit (the Source editor keeps its own text undo).
+  $(document).on('keydown', function (e) {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || String(e.key).toLowerCase() !== 'z' || !$('#libStudio:not(.hidden)').length) return;
+    if ($(document.activeElement).is('textarea, input')) return;
+    if (studio.undo && studio.undo.length) { e.preventDefault(); undo(); }
+  });
+  $(document).on('click', '#lpsRevert', function () { pushUndo(); studio.source = studio.original; studio.error = ''; studio.pin = -1; render(); if (studio.editing) $('#lpsEditor').val(studio.source); });
   $(document).on('click', '#lpsCopySrc', function () { copy(studio.source, 'Source'); });
   var editTimer = null;
   $(document).on('input', '#lpsEditor', function () {
