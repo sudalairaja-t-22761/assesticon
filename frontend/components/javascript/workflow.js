@@ -5,7 +5,7 @@
  *   found by comparing the UI library (Iconassest) with the mock branch and the master branch sprites
  * - Request Icon form (target sprite: utilicon = crmutil_icons, cssicon = svg_cssicons)
  * - Two stages, each with a Visual audit then a UI audit:
- *     unverified    → audits → the requester pushes to the mock branch   → mock verified
+ *     unverified    → audits → an admin pushes to the mock branch       → mock verified
  *     mock verified → audits → an admin approves + pushes to the master branch → master verified
  * - Requests page: step progress, admin can assign Visual audit + UI audit approvers, reviewers approve/reject
  * - Members page (admin only): add members with a role and an approver type (None / Visual audit / UI audit)
@@ -374,7 +374,7 @@
     var st = ic ? SF.wfStatusOf(ic) : '', stage = requestStageOf(ic), onMock = ic && mockSpriteOf(ic);
     var steps = stage === 'master'
       ? ['Mock verified', 'Visual audit', 'UI audit', 'Admin approves', branchName('master')]
-      : ['Unverified', 'Visual audit', 'UI audit', 'You push', branchName('mock')];
+      : ['Unverified', 'Visual audit', 'UI audit', 'Admin push', branchName('mock')];
     $('#wfReqFlow').html(ic ? '<span class="vf-pill-tag vf-stage-' + (stage || 'done') + '">' + esc(STATUS_LABEL[st] || st) + '</span> ' +
       (stage ? steps.map(esc).join(' <span class="vf-arrow">→</span> ') : '<span class="vf-msg">' + esc(
         st === 'master_verified' ? 'Already on the master branch — nothing to request.'
@@ -385,7 +385,7 @@
     $('#wfReqSubmit').prop('disabled', !stage).text(stage === 'master' ? 'Request push to master' : 'Request mock verification');
     $('#wfReqHelp').text(stage === 'master'
       ? 'The Visual audit and the UI audit check it again; then only an admin can approve and push it to the master branch.'
-      : 'The Visual audit and then the UI audit have to approve; then you push it to the mock branch from the request.');
+      : 'The Visual audit and then the UI audit have to approve; then an admin pushes it to the mock branch.');
   }
 
   $(document).on('change', '#wfReqIcon', updateRequestPreview);
@@ -426,9 +426,9 @@
   }
 
   function pill(status) { return '<span class="vf-pill vf-pill-' + status + '">' + esc(status) + '</span>'; }
-  // Request status in words: an audited request still waits for its push (mock: requester, master: admin).
+  // Request status in words: an audited request still waits for an admin to push it.
   function statusPill(r) {
-    if (r.status === 'approved') return '<span class="vf-pill vf-pill-pending">' + (stageOf(r) === 'master' ? 'waiting for admin approval' : 'audits passed · push to mock') + '</span>';
+    if (r.status === 'approved') return '<span class="vf-pill vf-pill-pending">' + 'waiting for push approval' + '</span>';
     if (r.status === 'pushed') {
       var on = stageOf(r) === 'master' ? 'on master' : 'on mock', rel = releaseState(r);
       return '<span class="vf-pill vf-pill-pushed">' + on + (rel === 'published' ? ' · v' + esc(r.releaseVersion) : '') + '</span>' +
@@ -531,18 +531,18 @@
   var GROUPS = [
     { key: 'visual', title: 'Visual audit', hint: 'Waiting for a Visual audit approver.', test: function (r) { return r.status === 'pending' && r.designerDecision !== 'approved'; } },
     { key: 'ui', title: 'UI audit', hint: 'Visual audit approved — waiting for a UI audit approver.', test: function (r) { return r.status === 'pending' && r.designerDecision === 'approved'; } },
-    { key: 'ready', title: 'Ready to push', hint: 'Both audits passed. Mock: the requester pushes it. Master: an admin approves and pushes it.', test: function (r) { return r.status === 'approved'; } },
+    { key: 'ready', title: 'Ready to push', hint: 'Both audits passed — waiting for an admin to approve and push it.', test: function (r) { return r.status === 'approved'; } },
     { key: 'done', title: 'Pushed', hint: 'On the branch; the npm version appears once it is published.', test: function (r) { return r.status === 'pushed'; } },
     { key: 'rejected', title: 'Rejected', hint: 'Rejected in an audit or declined by an admin.', test: function (r) { return r.status === 'rejected'; } }
   ];
   function targetText(r) { return r.targetSprite === 'svg_cssicons' ? 'cssicon' : 'utilicon'; }
   function whoCell(r) { return esc(r.requestedByName || r.requestedBy); }
-  // The action a row offers this person: Review (approver), Push (requester / admin), else what it waits for (pushes).
+  // The action a row offers this person: Review (approver), Push (admin), else what it waits for.
   function actionCell(r) {
     if (r.canReview) return '<button class="btn btn-primary btn-sm" type="button" data-vf-review-open="' + esc(r.ROWID) + '">Review · ' + esc(AUDIT[r.canReview]) + '</button>';
     if (r.canPush) return '<button class="btn btn-primary btn-sm" type="button" data-vf-open-push="' + esc(r.ROWID) + '">' + (r.canPush === 'master' ? 'Approve &amp; push to master' : 'Push to mock') + '</button>';
     if (r.status === 'pending') return ''; // the Approver column says who it waits for
-    if (r.status === 'approved') return '<span class="vf-msg">' + (stageOf(r) === 'master' ? 'waiting for an admin' : 'waiting for ' + esc(r.requestedByName || r.requestedBy) + ' to push') + '</span>';
+    if (r.status === 'approved') return '<span class="vf-msg">Waiting for push approval</span>';
     return '';
   }
   function decidedBy(decision, by, slot) { return decision ? decisionPill(decision, slot) + (by ? ' <span class="vf-msg">' + esc(by) + '</span>' : '') : '<span class="vf-msg">—</span>'; }
@@ -723,8 +723,7 @@
           '<button class="btn btn-primary btn-sm" id="wfPushBtn" type="button">Approve &amp; push to master · ' + target + '</button>' +
           '<button class="btn btn-ghost btn-sm" id="wfDeclineBtn" type="button" style="color:var(--danger)">Decline</button>';
       } else if (r.status === 'approved') {
-        actions += '<span class="vf-msg">' + (stageOf(r) === 'master' ? 'Both audits passed — waiting for an admin to approve and push it to the master branch.'
-          : 'Both audits passed — waiting for ' + esc(r.requestedByName || r.requestedBy) + ' to push it to the mock branch.') + '</span>';
+        actions += '<span class="vf-msg">Both audits passed — waiting for push approval. An admin will push it to the ' + (stageOf(r) === 'master' ? 'master' : 'mock') + ' branch.</span>';
       }
       $('#wfRequestDetail').html('<div class="vf-detail">' +
         '<div class="vf-detail-head"><img src="' + dataUri(r.svg) + '" alt=""><div><b>' + esc(r.iconName) + '</b> ' + stageTag(r) + ' ' + statusPill(r) +

@@ -34,11 +34,11 @@
  *   POST   /api/mail/test               → send a test mail to the signed-in admin; reports where it ran + the exact error [admin]
  *   POST   /api/requests/:id/resend     → mail the approvers of every still-open review again          [admin]
  *   DELETE /api/requests/:id            → admin: any request; requester: own pending/rejected request
- *   POST   /api/requests/:id/push       → { commitSha? }  record the push   [mock: requester or admin · master: admin]
+ *   POST   /api/requests/:id/push       → { commitSha? }  record the push   [admin]
  *   POST   /api/requests/:id/decline    → { note }  admin turns down an audited master request         [admin]
  *
  * Flow (UI library = Iconassest, mock = REPO_BRANCH, master = MASTER_REPO_BRANCH):
- *   unverified ─request─▶ requested ─Visual + UI audit─▶ requester pushes to mock ─▶ mock_verified
+ *   unverified ─request─▶ requested ─Visual + UI audit─▶ admin pushes to mock ─▶ mock_verified
  *   mock_verified ─request─▶ master_requested ─Visual + UI audit─▶ admin approves + pushes to master ─▶ master_verified
  * A rejection (or a deleted request) puts the icon back where that stage started (unverified / mock_verified).
  * The sprite write itself is done by the client through /api/master-library/save (mock) or
@@ -50,6 +50,7 @@ const store = require("../lib/store");
 const orgUsers = require("../lib/org-users");
 const { sendMail, approvalMail, releaseMail } = require("../lib/mailer");
 const crypto = require("crypto");
+const zlib = require("zlib");
 const { MENUS, MENU_KEYS, loadRoles, syncRoleRows, setRoleMenu, setRoleMenus, createRole, renameRole, deleteRole, getAccess, requireRole, norm, slug, menuList, isExpired, approverOf, BUILTIN } = require("../lib/roles");
 
 // ALLOW_SELF_APPROVAL=true lets a requester who is also an approver review (and be mailed about) their own request.
@@ -63,6 +64,16 @@ const stageOf = (r) => (r && r.stage === "master" ? "master" : "mock");
 // Where an icon goes back to when a request of that stage is rejected or deleted.
 const startStatus = (r) => (stageOf(r) === "master" ? "mock_verified" : "unverified");
 const str = (v, max) => String(v == null ? "" : v).slice(0, max || 500);
+
+// A request keeps a snapshot of the icon's SVG. One record holds 10,000 characters, so an SVG over SVG_INLINE is stored
+// Brotli-compressed (svgz, base64) — lossless, the exact same markup comes back. readSvg works for both forms.
+const SVG_INLINE = 6000;
+function packSvg(svg) {
+    if (svg.length <= SVG_INLINE) return { svg, svgz: "" };
+    const svgz = zlib.brotliCompressSync(Buffer.from(svg, "utf8"), { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 } }).toString("base64");
+    return svgz.length <= SVG_INLINE ? { svg: "", svgz } : null;
+}
+const readSvg = (r) => (r.svgz ? zlib.brotliDecompressSync(Buffer.from(r.svgz, "base64")).toString("utf8") : r.svg || "");
 
 // Optional access expiry: ISO string, must be a valid future time. "" clears it. Returns null when invalid.
 function parseExpiry(v) {
@@ -95,8 +106,10 @@ function createWorkflowRouter({ requireSession }) {
 
     // Which review slot ("designer" | "ui" | "") this person may act on for request r. Every active approver of a
     // type is in the pool unless an admin assigned that slot to one person; nobody reviews their own request.
-    function reviewSlot(members, email, r) {
+    // An admin may approve both audits: the Visual audit first, then the UI audit, whoever is assigned.
+    function reviewSlot(members, email, r, admin) {
         const e = norm(email);
+        if (admin && e && !isOwnRequest(r, e)) return r.designerDecision !== "approved" ? "designer" : "ui";
         const m = members.find((x) => norm(x.userEmail) === e);
         if (!e || !m || isExpired(m) || isOwnRequest(r, e)) return "";
         const type = approverOf(m);
@@ -106,8 +119,8 @@ function createWorkflowRouter({ requireSession }) {
         return assigned && norm(assigned) !== e ? "" : type;
     }
     const slotDecision = (r, slot) => (slot === "designer" ? r.designerDecision : slot === "ui" ? r.uiDecision : "");
-    // Mock push: the requester (or an admin). Master push: admin only. req.role is set by requireRole.
-    const canPush = (req, r) => req.role === "admin" || (stageOf(r) === "mock" && norm(r.requestedBy) === norm(me(req).email));
+    // Pushing an audited icon (mock or master) is admin only. req.role is set by requireRole.
+    const canPush = (req) => req.role === "admin";
 
     // Mail every active approver of `type` (except the requester); returns { sent[], failed[] }.
     async function mailApprovers(req, db, request, type, members) {
@@ -483,7 +496,8 @@ function createWorkflowRouter({ requireSession }) {
         if (!TARGET_SPRITES.includes(targetSprite)) return res.status(400).json({ success: false, message: "targetSprite must be crmutil_icons or svg_cssicons" });
         const svg = String(b.svg == null ? "" : b.svg);
         if (!svg) return res.status(400).json({ success: false, message: "svg required" });
-        if (svg.length > 6000) return res.status(400).json({ success: false, message: `This icon's SVG is too large to store in a request (${svg.length} of 6000 characters). Simplify the icon first.` });
+        const packed = packSvg(svg);
+        if (!packed) return res.status(400).json({ success: false, message: `This icon's SVG is too large to store in a request (${svg.length} characters, ${SVG_INLINE} after compression is the limit). Simplify the icon first.` });
 
         const stage = b.stage === "master" ? "master" : "mock";
 
@@ -506,7 +520,7 @@ function createWorkflowRouter({ requireSession }) {
         if (stage === "master" && !onMock) return res.status(409).json({ success: false, message: "Only a mock verified icon can be requested for master — get it audited and pushed to mock first" });
 
         const saved = await db.insert("icon_requests", {
-            symbolId, sprite, iconName: str(b.iconName || symbolId, 200), svg,
+            symbolId, sprite, iconName: str(b.iconName || symbolId, 200), ...packed,
             targetSprite, note: str(b.note, 1000), stage,
             requestedBy: me(req).email || "", requestedByName: me(req).name || "",
             status: "pending", assignedDesigner: "", assignedUI: "",
@@ -534,10 +548,10 @@ function createWorkflowRouter({ requireSession }) {
         const db = store.forRequest(req);
         let list = await db.all("icon_requests");
         const members = await db.all("members");
-        if (req.role !== "admin") list = list.filter((r) => norm(r.requestedBy) === mine || reviewSlot(members, mine, r));
+        if (req.role !== "admin") list = list.filter((r) => norm(r.requestedBy) === mine || reviewSlot(members, mine, r, req.role === "admin"));
         // The svg snapshot is only needed on the detail view. canReview / canPush say what this person may do on each row.
-        res.json({ success: true, role: req.role, requests: list.map(({ svg, ...rest }) => {
-            const slot = reviewSlot(members, mine, rest);
+        res.json({ success: true, role: req.role, requests: list.map(({ svg, svgz, ...rest }) => {
+            const slot = reviewSlot(members, mine, rest, req.role === "admin");
             return { ...rest, canReview: rest.status === "pending" && slot && !slotDecision(rest, slot) ? slot : "",
                 canPush: rest.status === "approved" && canPush(req, rest) ? stageOf(rest) : "" };
         }).reverse() });
@@ -549,11 +563,12 @@ function createWorkflowRouter({ requireSession }) {
         const r = reqs.find((x) => String(x.ROWID) === req.params.id);
         if (!r) return res.status(404).json({ success: false, message: "Request not found" });
         const mine = norm(me(req).email);
-        const slot = reviewSlot(await db.all("members"), mine, r);
+        const slot = reviewSlot(await db.all("members"), mine, r, req.role === "admin");
         if (req.role !== "admin" && norm(r.requestedBy) !== mine && !slot) {
             return res.status(403).json({ success: false, message: "Not allowed for your role" });
         }
-        res.json({ success: true, request: r, events: events.filter((e) => String(e.requestId) === String(r.ROWID)),
+        const { svgz, ...plain } = r;
+        res.json({ success: true, request: { ...plain, svg: readSvg(r) }, events: events.filter((e) => String(e.requestId) === String(r.ROWID)),
             canReview: r.status === "pending" && slot && !slotDecision(r, slot) ? slot : "",
             canPush: r.status === "approved" && canPush(req, r) ? stageOf(r) : "" });
     }));
@@ -599,7 +614,7 @@ function createWorkflowRouter({ requireSession }) {
         if (!["approve", "reject"].includes(decision)) return res.status(400).json({ success: false, message: "decision must be approve or reject" });
 
         const email = norm(me(req).email);
-        const slot = reviewSlot(await db.all("members"), email, r);
+        const slot = reviewSlot(await db.all("members"), email, r, req.role === "admin");
         if (!slot) return res.status(403).json({ success: false, message: "You are not an approver for this request" });
         const decided = slotDecision(r, slot);
         if (decided) {
@@ -628,7 +643,7 @@ function createWorkflowRouter({ requireSession }) {
             uiMail = { sent: out.sent.length, failed: out.failed.length, local: out.sent.some((x) => x.dev), error: (out.failed[0] || {}).error || "", pool: out.pool.length };
             await db.update("icon_requests", r.ROWID, { notifiedUI: out.pool.map((x) => x.userEmail).join(","), mailStatus: mailState([out]) });
         }
-        // Both audits passed: the icon keeps its requested status until it is pushed (mock: requester, master: admin).
+        // Both audits passed: the icon keeps its requested status until an admin pushes it.
         if (fields.status === "rejected") await setIconStatus(db, r.symbolId, r.sprite, startStatus(r), req);
         res.json({ success: true, request: saved, uiMail });
     }));
@@ -697,7 +712,7 @@ function createWorkflowRouter({ requireSession }) {
         if (r.status !== "approved") return res.status(409).json({ success: false, message: "Both the Visual audit and the UI audit must approve before pushing" });
         if (!canPush(req, r)) {
             return res.status(403).json({ success: false, message: stageOf(r) === "master"
-                ? "Only an admin can approve and push to the master branch" : "Only the requester (or an admin) can push this icon to the mock branch" });
+                ? "Only an admin can approve and push to the master branch" : "Only an admin can push this icon to the mock branch" });
         }
         const master = stageOf(r) === "master";
         const saved = await db.update("icon_requests", r.ROWID, { status: "pushed", pushCommitSha: str(req.body.commitSha, 80), pushedBy: me(req).email || "", pushedAt: new Date().toISOString(),
