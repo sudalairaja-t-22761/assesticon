@@ -98,13 +98,27 @@ write(loadersName, loaders);
 write(appName, app);
 html = html.replace("@@LOADERS@@", `<script src="${loadersName}"></script>`).replace("@@APP@@", `<script src="${appName}"></script>`);
 
-// ── 3. static files copied as they are ────────────────────────────────────
+// ── 3. the standalone sign-in page: its local stylesheets and scripts are inlined ─────
+// login.html is served before any session exists and must work on its own (one request + config.js).
+function inlinePage(file) {
+    let page = read(file);
+    page = page.replace(/[ \t]*<link rel="stylesheet" href="(components\/styles\/[^"]+)">\r?\n?/g,
+        (all, href) => `  <style>/* ${clean(href)} */\n${read(clean(href))}</style>\n`);
+    page = page.replace(/[ \t]*<script src="(components\/javascript\/[^"]+)"><\/script>\r?\n?/g,
+        (all, src) => `  <script>/* ${clean(src)} */\n${read(clean(src)).replace(/<\/script/gi, "<\\/script")}</script>\n`);
+    if (/(?:href|src)="components\/(?:styles|javascript)\//.test(page)) throw new Error(`${file}: a component reference was not inlined`);
+    write(file, page);
+}
+inlinePage("login.html");
+
+// ── 4. static files copied as they are ────────────────────────────────────
 write("index.html", html);
 for (const f of ["config.js", "favicon.svg", "client-package.json"]) fs.copyFileSync(path.join(ROOT, f), path.join(OUT, f));
 copyDir("components/javascript/vendor"); // loaded on demand by create-svg.js (import('./vendor/potrace.esm.js'))
 
 const size = (rel) => (fs.statSync(path.join(OUT, rel)).size / 1024).toFixed(0) + " KB";
 console.log(`Client built in frontend/dist:
+  login.html (sign-in page, assets inlined, ${size("login.html")})
   ${cssName} (${cssFiles.length} files, ${size(cssName)})
   ${loadersName} (${head.files.length} loaders, ${inlined} templates inlined, ${size(loadersName)})
   ${appName} (${tail.files.length} files, ${size(appName)})`);

@@ -1,5 +1,5 @@
 (function () {
-  const p = fetch('components/templates/svg-topbar.html?v=2').then(r => r.text());
+  const p = fetch('components/templates/svg-topbar.html?v=3').then(r => r.text());
   window._componentPromises = window._componentPromises || [];
   window._componentPromises.push(p);
 

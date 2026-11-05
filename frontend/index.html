@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="components/styles/responsive.css?v=16">
   <!-- Component CSS -->
   <link rel="stylesheet" href="components/styles/svg-sidebar.css?v=16">
-  <link rel="stylesheet" href="components/styles/svg-topbar.css?v=16">
+  <link rel="stylesheet" href="components/styles/svg-topbar.css?v=17">
   <link rel="stylesheet" href="components/styles/svg-upload.css?v=27">
   <link rel="stylesheet" href="components/styles/svg-icon-list.css?v=16">
   <link rel="stylesheet" href="components/styles/svg-code-output.css?v=16">
@@ -37,12 +37,23 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body>
+<body class="auth-checking">
   <script src="config.js?v=3"></script>
+  <!-- Auth guard: without a stored session (and no OAuth code to exchange) go to the full-page sign-in
+       before any component loads. app.js re-checks the stored session against the server. -->
+  <script>
+    (function () {
+      if (!window.SF_AUTH_ENABLED) return;
+      var sid = '';
+      try { sid = localStorage.getItem(window.SF_AUTH_STORAGE_KEY || 'sf_session_id') || ''; } catch (e) {}
+      var hasCode = /[?&]code=/.test(window.location.search || '');
+      if (!sid && !hasCode) window.location.replace('login.html' + (window.location.hash || ''));
+    }());
+  </script>
 
   <!-- Web Components (template loaders) -->
   <script src="components/javascript/svg-sidebar.js?v=18"></script>
-  <script src="components/javascript/svg-topbar.js?v=17"></script>
+  <script src="components/javascript/svg-topbar.js?v=18"></script>
   <script src="components/javascript/svg-upload.js?v=16"></script>
   <script src="components/javascript/svg-icon-list.js?v=16"></script>
   <script src="components/javascript/svg-code-output.js?v=17"></script>
@@ -135,7 +146,7 @@
   <script src="components/javascript/helpdoc.js?v=21"></script>
   <script src="components/javascript/create-svg.js?v=9"></script>
   <script src="components/javascript/figma.js?v=18"></script>
-  <script src="components/javascript/app.js?v=70"></script>
+  <script src="components/javascript/app.js?v=71"></script>
   <script src="components/javascript/webfont.js?v=2"></script>
   <script src="components/javascript/saved-assets.js?v=2"></script>
   <script src="components/javascript/asset-store.js?v=1"></script>

@@ -56,24 +56,6 @@
   margin-right: 6px;
 }
 
-.topbar-auth-status {
-  display: inline-flex;
-  align-items: center;
-  padding: 5px 10px;
-  border-radius: 999px;
-  background: #FDECC8;
-  color: #7A5411;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.topbar-auth-status.is-authenticated {
-  background: #DFF4E8;
-  color: #15693A;
-}
-
 .topbar-auth-btn {
   padding: 6px 12px !important;
   font-size: 12px !important;
@@ -118,6 +100,13 @@
   white-space: nowrap;
 }
 
+/* ── Auth check in progress: keep the dashboard out of sight until the stored session is
+   confirmed (app.js removes the class), so a rejected session never flashes the app. ── */
+body.auth-checking .sidebar,
+body.auth-checking .main {
+  visibility: hidden;
+}
+
 /* ── Auth-gated button disabled state ─────────────────────────────────────── */
 .auth-required #generateBtn,
 .auth-required #saveToProjectBtn,
@@ -127,19 +116,6 @@
   cursor: not-allowed;
   pointer-events: auto; /* keep pointer-events so our click handler fires */
   filter: grayscale(30%);
-}
-
-/* Sign-in button pulse when user tries a gated action */
-@keyframes auth-highlight-pulse {
-  0%   { box-shadow: 0 0 0 0 rgba(255, 165, 0, 0.7); }
-  50%  { box-shadow: 0 0 0 6px rgba(255, 165, 0, 0.2); }
-  100% { box-shadow: 0 0 0 0 rgba(255, 165, 0, 0); }
-}
-
-#authLoginBtn.auth-highlight {
-  animation: auth-highlight-pulse 0.7s ease-out 2;
-  outline: 2px solid orange;
-  outline-offset: 2px;
 }
 
 .btn-generate {
@@ -162,10 +138,6 @@
 }
 
 @media (max-width: 900px) {
-  .topbar-auth-status {
-    display: none;
-  }
-
   .topbar-user-email {
     display: none;
   }

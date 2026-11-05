@@ -71,12 +71,28 @@
     _setAuthState('', null, null);
   }
 
+  // Full-page sign-in lives in login.html; the dashboard (index.html) is only shown to a signed-in user.
+  var LOGIN_PAGE = 'login.html';
+  var _redirectingToLogin = false;
+
+  function _goToLogin(reason, message) {
+    if (_redirectingToLogin) return;
+    _redirectingToLogin = true;
+    $('body').addClass('auth-checking');
+    var params = new URLSearchParams();
+    if (reason) params.set('reason', reason);
+    if (message) params.set('message', String(message).slice(0, 200));
+    var query = params.toString();
+    window.location.replace(LOGIN_PAGE + (query ? '?' + query : '') + (window.location.hash || ''));
+  }
+
+  function _revealDashboard() {
+    $('body').removeClass('auth-checking');
+  }
+
   function _handleHostedUnauthorized(message) {
     _clearAuthState();
-    _updateAuthUi();
-    if (typeof SF.loadSavedFolders === 'function') SF.loadSavedFolders();
-    if (typeof SF.loadLibraryFolders === 'function') SF.loadLibraryFolders();
-    SF.showToast(message || 'Session expired. Sign in with Zoho and try again.');
+    _goToLogin('expired', '');
   }
 
   function _stripAuthQueryParams() {
@@ -95,10 +111,7 @@
   function _onGatedBtnClick(e) {
     e.preventDefault();
     e.stopImmediatePropagation();
-    SF.showToast('Please sign in with Zoho to use this feature.');
-    // Highlight the sign-in button briefly
-    $('#authLoginBtn').addClass('auth-highlight');
-    setTimeout(function () { $('#authLoginBtn').removeClass('auth-highlight'); }, 1500);
+    _goToLogin('required', '');
   }
 
   function _setAuthButtonsDisabled(disabled) {
@@ -121,13 +134,7 @@
     var userAvatar = state.auth.userAvatar || '';
 
     $('#authControls').toggleClass('hidden', !hasAuth);
-    $('#authLoginBtn').toggleClass('hidden', !hasAuth || isSignedIn);
     $('#authUserBox').toggleClass('hidden', !hasAuth || !isSignedIn);
-    $('#authStatusPill')
-      .toggleClass('hidden', !hasAuth)
-      .toggleClass('is-authenticated', isSignedIn)
-      .text(isSignedIn ? 'Signed in' : 'Auth required');
-    console.log('state.auth', state.auth);
     $('#authUserName').text(state.auth.username  || 'Zoho User');
     $('#authUserEmail').text(state.auth.useremail || '');
     $('#authUserAvatar')
@@ -187,16 +194,6 @@
     });
   }
 
-  function _beginZohoLogin() {
-    var origin = window.location.origin || (window.location.protocol + '//' + window.location.host);
-    return _authFetch('api/auth/zoho/url?redirect_origin=' + encodeURIComponent(origin), { method: 'GET', headers: {} }).then(function (data) {
-      if (!data || !data.url) {
-        throw new Error('Could not compute Zoho login URL');
-      }
-      window.location.href = data.url;
-    });
-  }
-
   function _validateHostedSession() {
     return _authFetch('api/auth/session', { method: 'GET', headers: {} }).then(function (data) {
       _setAuthState(data.sessionId, data.user, data.zohoProfile);
@@ -222,9 +219,7 @@
       return null;
     }).then(function () {
       _clearAuthState();
-      _updateAuthUi();
-      if (typeof SF.loadSavedFolders === 'function') SF.loadSavedFolders();
-      if (typeof SF.loadLibraryFolders === 'function') SF.loadLibraryFolders();
+      _goToLogin('logout', '');
     });
   }
 
@@ -234,6 +229,7 @@
     _updateAuthUi();
 
     if (!_isHostedAuthEnabled()) {
+      _revealDashboard();
       return Promise.resolve(false);
     }
 
@@ -244,12 +240,11 @@
     if (code) {
       return _exchangeZohoCode(code).then(function (data) {
         _stripAuthQueryParams();
+        _revealDashboard();
         return data;
       }).catch(function (error) {
-        _stripAuthQueryParams();
         _clearAuthState();
-        _updateAuthUi();
-        SF.showToast((error && error.message) || 'Sign-in failed');
+        _goToLogin('failed', (error && error.message) || '');
         return false;
       });
     }
@@ -265,19 +260,30 @@
       return _validate().catch(function (e) {
         if (_isAuthRejection(e)) return Promise.reject(e);
         return new Promise(function (r) { setTimeout(r, 1200); }).then(_validate);
+      }).then(function (data) {
+        _revealDashboard();
+        return data;
       }).catch(function (e) {
         if (_isAuthRejection(e)) {
           _clearAuthState();
-        } else {
-          _setAuthState(storedSessionId, null, null); // keep session; server unreachable
+          _goToLogin('expired', '');
+          return false;
         }
+        _setAuthState(storedSessionId, null, null); // keep session; server unreachable
         _updateAuthUi();
+        _revealDashboard();
         return false;
       });
     }
 
+    // No session and no code: the inline guard in index.html normally redirects before we get here.
+    _goToLogin('required', '');
     return Promise.resolve(false);
   }
+
+  SF.goToLogin = function (reason, message) {
+    _goToLogin(reason, message);
+  };
 
   SF.isHostedAuthBlocked = function () {
     return _isHostedAuthEnabled() && !(state.auth && state.auth.isAuthenticated);
@@ -847,12 +853,6 @@
 
   function init() {
     var authReady = _bootstrapAuth();
-
-    $('#authLoginBtn').on('click', function () {
-      _beginZohoLogin().catch(function (error) {
-        SF.showToast((error && error.message) || 'Could not start Zoho sign-in');
-      });
-    });
 
     $('#authLogoutBtn').on('click', function () {
       _logoutHostedSession();
