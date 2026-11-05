@@ -257,13 +257,27 @@
     }).join(' · ');
   }
 
+  // One glyph per status, drawn on the Library tile (no text): dashed ring = unverified, ring + clock = mock requested,
+  // filled disc + tick = mock verified, shield + clock = master requested, filled shield + tick = master verified.
+  var MARK_SVG = {
+    unverified: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="8.5" stroke-dasharray="3.2 3.2"/></svg>',
+    requested: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><polyline points="12 7.5 12 12 15.2 14"/></svg>',
+    mock_verified: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" fill="currentColor"/><polyline points="7.5 12.3 10.6 15.3 16.5 9" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    master_requested: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.8l7.5 2.8v6c0 4.8-3.2 8.3-7.5 10-4.3-1.7-7.5-5.2-7.5-10v-6L12 2.8z"/><polyline points="12 8.5 12 12.3 14.6 13.8"/></svg>',
+    master_verified: '<svg viewBox="0 0 24 24"><path d="M12 2.2l8 3v6.3c0 5-3.4 8.8-8 10.6-4.6-1.8-8-5.6-8-10.6V5.2l8-3z" fill="currentColor"/><polyline points="8 12.2 10.9 15 16.2 9.4" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+  };
+  var MARK_TIP = {
+    unverified: 'Unverified — tick the icon and use "Request verification" to request the mock verification',
+    requested: 'Mock requested — waiting for the audits and the admin push to the mock branch',
+    mock_verified: 'Mock verified — on the mock branch; tick the icon and use "Request verification" to request the push to master',
+    master_requested: 'Master requested — waiting for the audits and the admin approval',
+    master_verified: 'Master verified — on the master branch'
+  };
   SF.wfBadgeHtml = function (icon) {
     var st = SF.wfStatusOf(icon);
-    var tip = (st === 'unverified' ? 'Not verified yet — click to request the mock verification'
-      : st === 'mock_verified' ? 'On the mock branch — click to request the push to master' : STATUS_LABEL[st]) +
-      (compareText(icon) ? '\n' + compareText(icon) : '');
-    return '<span class="vf-badge vf-badge-' + st + '" data-vf-symbol="' + esc(icon.symbolId) + '" data-vf-sprite="' + esc(icon.sprite) +
-      '" title="' + esc(tip) + '">' + (st === 'unverified' ? 'Unverified' : TICK + ' ' + STATUS_LABEL[st]) + '</span>';
+    var tip = (MARK_TIP[st] || STATUS_LABEL[st] || st) + (compareText(icon) ? '\n' + compareText(icon) : '');
+    return '<span class="vf-mark vf-mark-' + st + '" data-vf-symbol="' + esc(icon.symbolId) + '" data-vf-sprite="' + esc(icon.sprite) +
+      '" title="' + esc(tip) + '" aria-label="' + esc(STATUS_LABEL[st] || st) + '">' + (MARK_SVG[st] || MARK_SVG.unverified) + '</span>';
   };
 
   function renderStatusFilter() {
@@ -293,6 +307,7 @@
     SF.renderLibraryGrid = function () {
       var r = renderGrid.apply(this, arguments);
       if ($('#libSourceFilter').length) renderStatusFilter();
+      updateBulkRequest();
       return r;
     };
     SF.renderLibraryGrid._vfCounts = true;
@@ -314,11 +329,123 @@
     SF.renderLibraryGrid();
   });
 
-  // Clicking an "Unverified" badge starts the mock request, a "Mock verified" badge the master request.
-  $(document).on('click', '.vf-badge-unverified, .vf-badge-mock_verified', function (e) {
-    e.stopPropagation();
-    wf.prefill = { symbolId: $(this).data('vf-symbol'), sprite: $(this).data('vf-sprite') };
-    SF.switchPage('requesticon');
+  // ── "Request verification" for the ticked Library icons (selection bar, next to "Add Selected to Sprite") ──
+  // Unverified icons get a mock request, mock verified icons a master request; the rest cannot be requested.
+  var REQ_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.2l8 3v6.3c0 5-3.4 8.8-8 10.6-4.6-1.8-8-5.6-8-10.6V5.2l8-3z"/><polyline points="8.5 12 11 14.5 15.5 9.5"/></svg>';
+  function selectedRepoIconsForRequest() {
+    var sel = (SF.libState && SF.libState.selected) || {};
+    return ((SF.libState && SF.libState.icons) || []).filter(function (i) { return i && i.source === 'repo' && sel[i.id]; });
+  }
+  function requestableSelection() {
+    return selectedRepoIconsForRequest().map(function (ic) { return { ic: ic, stage: requestStageOf(ic) }; })
+      .filter(function (x) { return !!x.stage; });
+  }
+  function updateBulkRequest() {
+    var $bar = $('#libBulkActions');
+    if (!$bar.length) return;
+    if (!$('#libReqSelectedBtn').length) {
+      $('<button class="btn btn-primary btn-sm" id="libReqSelectedBtn" type="button" disabled>' + REQ_ICON + ' <span>Request verification</span></button>')
+        .insertAfter($('#libGenerateWebfontBtn').length ? '#libGenerateWebfontBtn' : '#libAddSelectedBtn');
+    }
+    renderStatusLegend();
+    var sel = selectedRepoIconsForRequest(), req = requestableSelection();
+    var mocks = req.filter(function (x) { return x.stage === 'mock'; }).length, masters = req.length - mocks;
+    $('#libReqSelectedBtn').prop('disabled', !req.length)
+      .attr('title', !sel.length ? 'Tick repository icons to request their verification'
+        : !req.length ? 'The ticked icons are already requested or on the master branch'
+        : (mocks ? mocks + ' mock verification' : '') + (mocks && masters ? ' · ' : '') + (masters ? masters + ' push to master' : ''))
+      .find('span').text('Request verification' + (req.length ? ' (' + req.length + ')' : ''));
+  }
+  // Legend for the tile markers, at the right end of the selection/category row: glyph + status name.
+  function renderStatusLegend() {
+    var $bar = $('#libBulkActions');
+    if (!$bar.length || $('#libStatusLegend').length) return;
+    $bar.append('<span class="vf-legend" id="libStatusLegend" aria-label="Status markers">' +
+      Object.keys(STATUS_LABEL).map(function (k) {
+        return '<span class="vf-legend-item" title="' + esc(MARK_TIP[k] || STATUS_LABEL[k]) + '">' +
+          '<span class="vf-mark vf-mark-inline vf-mark-' + k + '">' + MARK_SVG[k] + '</span>' + esc(STATUS_LABEL[k]) + '</span>';
+      }).join('') + '</span>');
+  }
+  SF.wfUpdateBulkRequest = updateBulkRequest;
+  // Ticking icons does not re-render the grid: refresh the button after each change.
+  $(document).on('change', '.library-select-checkbox, #libSelectAllVisible', function () { setTimeout(updateBulkRequest, 0); });
+  $(document).on('click', '#libGrid .lib-card', function () { setTimeout(updateBulkRequest, 0); });
+
+  function ensureRequestDialog() {
+    if ($('#libReqDialog').length) return;
+    $('body').append(
+      '<div class="lps-overlay lreq-overlay hidden" id="libReqDialog" role="dialog" aria-modal="true" aria-labelledby="lreqTitle">' +
+        '<div class="lcat lreq">' +
+          '<div class="lcat-head"><b id="lreqTitle">Request verification</b>' +
+            '<button class="lpp-close" id="lreqClose" type="button" aria-label="Close">' +
+              '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>' +
+          '<div class="lcat-hint" id="lreqHint"></div>' +
+          '<div class="lreq-list" id="lreqList"></div>' +
+          '<div class="vf-form lreq-form">' +
+            '<label id="lreqTargetWrap">Sprite for the mock verification<select id="lreqTarget">' +
+              Object.keys(TARGETS).map(function (k) { return '<option value="' + k + '">' + esc(TARGETS[k]) + '</option>'; }).join('') +
+            '</select></label>' +
+            '<label>Note<textarea id="lreqNote" rows="3" maxlength="1000" placeholder="Where will they be used?"></textarea></label>' +
+          '</div>' +
+          '<div class="lreq-foot">' +
+            '<button class="btn btn-ghost btn-sm" id="lreqCancel" type="button">Cancel</button>' +
+            '<button class="btn btn-primary btn-sm" id="lreqSubmit" type="button">Submit</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>');
+  }
+  function closeRequestDialog() { $('#libReqDialog').addClass('hidden'); }
+  function openRequestDialog() {
+    var req = requestableSelection();
+    if (!req.length) { SF.showToast('Tick unverified or mock verified repository icons first'); return; }
+    ensureRequestDialog();
+    var mocks = req.filter(function (x) { return x.stage === 'mock'; }).length, masters = req.length - mocks;
+    $('#lreqHint').text(
+      (mocks ? mocks + ' icon' + (mocks === 1 ? '' : 's') + ' → mock verification (Visual audit → UI audit → admin pushes to ' + branchName('mock') + ')' : '') +
+      (mocks && masters ? '  ·  ' : '') +
+      (masters ? masters + ' icon' + (masters === 1 ? '' : 's') + ' → push to master (Visual audit → UI audit → admin approves, ' + branchName('master') + ')' : ''));
+    $('#lreqList').html(req.map(function (x) {
+      var ic = x.ic, src = ic.svgContent ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(ic.svgContent) : '';
+      return '<div class="lreq-row">' + (src ? '<img src="' + src + '" alt="">' : '<span class="lreq-noimg"></span>') +
+        '<span class="lreq-name">' + esc(ic.name) + ' <small>' + esc(ic.sprite) + '.svg</small></span>' +
+        '<span class="vf-pill-tag vf-stage-' + x.stage + '">' + (x.stage === 'master' ? 'push to master' : 'mock verification') + '</span></div>';
+    }).join(''));
+    $('#lreqTargetWrap').toggleClass('hidden', !mocks);
+    $('#lreqNote').val('');
+    $('#lreqSubmit').prop('disabled', false).text('Submit ' + req.length + ' request' + (req.length === 1 ? '' : 's'));
+    $('#libReqDialog').removeClass('hidden');
+  }
+  $(document).on('click', '#libReqSelectedBtn', openRequestDialog);
+  $(document).on('click', '#lreqClose, #lreqCancel', closeRequestDialog);
+  $(document).on('click', '#libReqDialog', function (e) { if (e.target === this) closeRequestDialog(); });
+  $(document).on('keydown', function (e) { if (e.key === 'Escape' && $('#libReqDialog').length && !$('#libReqDialog').hasClass('hidden')) closeRequestDialog(); });
+
+  // One request per icon, sent one after the other (the server records and mails each on its own).
+  $(document).on('click', '#lreqSubmit', function () {
+    var req = requestableSelection();
+    if (!req.length) { closeRequestDialog(); return; }
+    var $btn = $(this).prop('disabled', true), target = $('#lreqTarget').val(), note = $('#lreqNote').val();
+    var done = 0, failed = [], total = req.length;
+    req.reduce(function (chain, x) {
+      return chain.then(function () {
+        var ic = x.ic, onMock = mockSpriteOf(ic);
+        $btn.text('Submitting ' + (done + failed.length + 1) + ' of ' + total + '…');
+        return api('POST', 'requests', {
+          symbolId: ic.symbolId, sprite: ic.sprite, iconName: ic.name, svg: ic.svgContent, stage: x.stage,
+          inMock: onBranch(ic, 'mock'), inMaster: onBranch(ic, 'master'),
+          targetSprite: x.stage === 'master' && onMock ? onMock : target, note: note
+        }).then(function () { done++; }, function (e) { failed.push(ic.name + ': ' + (e && e.message || 'failed')); });
+      });
+    }, Promise.resolve()).then(function () {
+      closeRequestDialog();
+      SF.showToast(done + ' of ' + total + ' request' + (total === 1 ? '' : 's') + ' submitted' +
+        (failed.length ? ' · failed: ' + failed.slice(0, 3).join('; ') + (failed.length > 3 ? ' …' : '') : '. Approvers are mailed per request.'));
+      return loadStatuses().catch(function () {});
+    }).then(function () {
+      if (typeof SF.renderLibraryGrid === 'function') SF.renderLibraryGrid();
+      updateBulkRequest();
+      if (done) SF.switchPage('wfrequests');
+    });
   });
 
   // ── Request Icon page ────────────────────────────────────────────────────

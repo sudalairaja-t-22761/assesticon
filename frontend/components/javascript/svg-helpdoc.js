@@ -1,6 +1,6 @@
 (function () {
   const pHelp = fetch('components/templates/svg-helpdoc.html?v=6').then(r => r.text());
-  const pLib = fetch('components/templates/svg-icon-library.html?v=11').then(r => r.text());
+  const pLib = fetch('components/templates/svg-icon-library.html?v=14').then(r => r.text());
   window._componentPromises = window._componentPromises || [];
   window._componentPromises.push(pHelp, pLib);
 
