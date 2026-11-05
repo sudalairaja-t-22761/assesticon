@@ -559,7 +559,7 @@
     var on = $('#fnameRepoCommit').is(':checked');
     $('#fnameRepoFields').toggleClass('hidden', !on);
     // File names are fixed by the repository when committing.
-    $('#fnameSpriteGroup, #fnameCssGroup, #fnameFolderGroup').toggleClass('ml-dimmed', on);
+    $('#fnameSpriteGroup, #fnameCssGroup, #fnameFolderGroup, #fnameShareGroup').toggleClass('ml-dimmed', on);
     $('#fnameRepoHint').text(on
       ? 'Files are committed and pushed directly to ' + (_cfg().repoName || 'the repository') + ' branch ' + (_cfg().branch || '') + '. Names above are ignored.'
       : '');

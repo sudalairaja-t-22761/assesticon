@@ -91,7 +91,7 @@ function parseApprover(v) {
 function createWorkflowRouter({ requireSession }) {
     const router = express.Router();
     // Mounted at /api, so gate only our own paths (other /api routes stay as they were).
-    router.use(["/me", "/users", "/org-users", "/members", "/roles", "/mail", "/icon-status", "/icon-categories", "/requests", "/activity-log"], requireSession);
+    router.use(["/me", "/users", "/share-users", "/org-users", "/members", "/roles", "/mail", "/icon-status", "/icon-categories", "/requests", "/activity-log"], requireSession);
 
     const me = (req) => req.auth.session.user;
 
@@ -177,6 +177,22 @@ function createWorkflowRouter({ requireSession }) {
     router.get("/activity-log", requireRole(["admin"]), wrap(async (req, res) => {
         const days = Math.max(0, parseInt(req.query.days, 10) || 0);
         res.json({ success: true, days, ...(await require("../lib/activity-log").summary(req, { days, limit: req.query.limit })) });
+    }));
+
+    // People a saved sprite can be shared with: everyone who has signed in, plus members added by email. Name and
+    // email only, for any signed-in user (the share picker); the full /users list stays admin only.
+    router.get("/share-users", requireRole(), wrap(async (req, res) => {
+        const db = store.forRequest(req);
+        const [users, members] = await Promise.all([db.all("user_data"), db.all("members")]);
+        const self = norm(me(req).email), seen = new Set([self]), list = [];
+        for (const u of [...users.map((x) => ({ email: x.userEmail, name: x.userName })), ...members.map((x) => ({ email: x.userEmail, name: x.userName }))]) {
+            const email = norm(u.email);
+            if (!email || seen.has(email) || !email.includes("@")) continue;
+            seen.add(email);
+            list.push({ email, name: str(u.name, 200) || email });
+        }
+        list.sort((a, b) => a.name.localeCompare(b.name));
+        res.json({ success: true, users: list });
     }));
 
     router.get("/users", requireRole(["admin"]), wrap(async (req, res) => {

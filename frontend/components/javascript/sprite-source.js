@@ -61,9 +61,9 @@
     saved.forEach(function (f) {
       var names = (f.files || []).map(function (x) { return x && x.name; }).filter(Boolean);
       out.push({
-        key: 'saved:' + f.name,
+        key: 'saved:' + (f.id || f.name),   // server entries are keyed by id (names may repeat across users)
         group: 'saved',
-        title: f.name,
+        title: f.name + (f.owner && !f.isMine && f.owner.name ? ' · ' + f.owner.name : ''),
         svg: names.filter(function (n) { return /\.svg$/i.test(n); })[0] || (f.name + '.svg'),
         css: names.filter(function (n) { return /\.(css|less)$/i.test(n); })[0] || '',
         meta: f.savedAt ? 'Saved ' + fmtDate(f.savedAt) : ''
@@ -219,6 +219,11 @@
     $root.find('.src-dd-trigger').attr('aria-expanded', 'false');
   }
 
+  function titleOf(key) {
+    var hit = SF.listSpriteSources().filter(function (s) { return s.key === key; })[0];
+    return hit ? hit.title : key.replace(/^(repo|saved):/, '').split('|')[0];
+  }
+
   function choose($root, key) {
     var action = actionOf($root);
     closeMenu($root);
@@ -226,7 +231,7 @@
     if (action === 'merge') {
       mergeChoice = key;
       renderPicker($root);
-    } else if (key !== current || window.confirm('Reload ' + key.replace(/^(repo|saved):/, '').split('|')[0] + ' from its source?')) {
+    } else if (key !== current || window.confirm('Reload ' + titleOf(key) + ' from its source?')) {
       load(key);
     }
   }

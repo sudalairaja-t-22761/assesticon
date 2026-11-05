@@ -720,6 +720,83 @@ function localSpRead()  { try { return JSON.parse(fs.readFileSync(LOCAL_SP_INDEX
 function localFileSize(dir, name) { try { return fs.statSync(path.join(dir, name)).size; } catch (_) { return 0; } }
 function localSpWrite(idx) { fs.mkdirSync(LOCAL_SP_DIR, { recursive: true }); fs.writeFileSync(LOCAL_SP_INDEX, JSON.stringify(idx, null, 2)); }
 
+// ── Saved sprite ownership ───────────────────────────────────────────────────
+// Every saved sprite belongs to the signed-in user who saved it (owner = { email, name }) and is stored under
+// savedsprites/<user>/<entryId>/ in Stratus. A user sees their own folders plus the ones other users shared to
+// everyone (shared: true); admins see every user's folders. Entries saved before ownership existed have no owner
+// and stay visible to everyone. Without a session (local dev with no SESSION_SECRET) saves have no owner.
+const SP_INDEX_KEY = "savedsprites/_index.json";
+function spOwnerOf(req) {
+    const s = getSession(req);
+    const u = s && s.session && s.session.user;
+    if (!u || !u.email) return null;
+    return { email: String(u.email).trim().toLowerCase(), name: String(u.name || u.email).trim() };
+}
+const spSlug = (email) => String(email || "").split("@")[0].toLowerCase().replace(/[^a-z0-9._-]+/g, "_").slice(0, 40) || "user";
+async function spViewer(req) {
+    const owner = spOwnerOf(req);
+    let role = "user";
+    if (owner) {
+        try { role = await require("./lib/roles").getRole(req, owner.email); }
+        catch (e) { console.warn("[saved-sprites] role lookup failed:", e.message); }
+    }
+    return { email: owner ? owner.email : "", name: owner ? owner.name : "", role };
+}
+const spEntryOwner = (e) => (e && e.owner && e.owner.email ? String(e.owner.email).toLowerCase() : "");
+const spIsMine = (e, viewer) => !!viewer.email && spEntryOwner(e) === viewer.email;
+// sharedWith: the users (lower-case emails) a folder is shared with when it is not shared with everyone.
+const spSharedWith = (e) => (Array.isArray(e && e.sharedWith) ? e.sharedWith : []);
+const spSharedWithMe = (e, viewer) => !!viewer.email && spSharedWith(e).includes(viewer.email);
+function spCanSee(e, viewer) {
+    if (viewer.role === "admin") return true;
+    return !spEntryOwner(e) || e.shared === true || spIsMine(e, viewer) || spSharedWithMe(e, viewer);
+}
+// Sharing from a request body: { shared: true } = all users; { sharedWith: [emails] } = those users; neither = private.
+// Returns null when the body says nothing about sharing (the caller keeps what the folder had).
+function spSharingOf(body, owner) {
+    body = body || {};
+    const all = body.shared === true || String(body.shared) === "true";
+    if (all) return { shared: true, sharedWith: [] };
+    if (Array.isArray(body.sharedWith)) {
+        const self = owner ? owner.email : "";
+        const list = [...new Set(body.sharedWith.map((x) => String(x || "").trim().toLowerCase())
+            .filter((x) => /^[^\s@]+@[^\s@]+$/.test(x) && x !== self))].slice(0, 200);
+        return { shared: false, sharedWith: list };
+    }
+    if (body.shared === false || String(body.shared) === "false") return { shared: false, sharedWith: [] };
+    return null;
+}
+// Delete / share: the owner or an admin only. Entries saved before ownership existed (no owner) are admin only.
+function spCanManage(e, viewer) {
+    if (viewer.role === "admin") return true;
+    return spIsMine(e, viewer);
+}
+function spPublic(e, viewer, extra) {
+    return Object.assign({
+        id:         e.id,
+        spriteName: e.spriteName,
+        savedAt:    e.savedAt || null,
+        folderKey:  e.folderKey,
+        hasCss:     !!e.hasCss,
+        svgBytes:   e.svgBytes || 0,   // 0 for entries saved before sizes were recorded (the client measures them)
+        cssBytes:   e.cssBytes || 0,
+        owner:      e.owner ? { email: e.owner.email || "", name: e.owner.name || e.owner.email || "" } : null,
+        shared:     e.shared === true,
+        // The list is shown to the owner and admins; everyone else only learns it was shared with them.
+        sharedWith: spCanManage(e, viewer) ? spSharedWith(e) : [],
+        sharedWithMe: spSharedWithMe(e, viewer),
+        isMine:     spIsMine(e, viewer),
+        canManage:  spCanManage(e, viewer)
+    }, extra || {});
+}
+async function spReadIndex(req) {
+    try { return JSON.parse((await stratusGet(req, SP_INDEX_KEY)).toString("utf8")); }
+    catch (_) { return { entries: [] }; }
+}
+async function spWriteIndex(req, index) {
+    await stratusPut(req, SP_INDEX_KEY, Buffer.from(JSON.stringify(index, null, 2), "utf8"), "application/json");
+}
+
 // ===================================
 // MASTER UI LIBRARY — CRM_UI_LIBRARY icon files read DIRECTLY from the repository
 // (2 sprites + 2 LESS), cached in memory only — nothing is stored in Stratus.
@@ -777,45 +854,63 @@ app.post("/api/save-sprite", async (req, res) => {
         const pad      = n => String(n).padStart(2, "0");
         const datePart = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
         const timePart = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-        const entryId  = `${datePart}_${timePart}_${safeName}`;
+        const owner    = spOwnerOf(req);
+        // Unique per save: two users saving the same name in the same second must not share an id
+        // (the id is the delete / share handle and the storage folder name).
+        const entryId  = `${datePart}_${timePart}_${safeName}_${crypto.randomBytes(3).toString("hex")}`;
         const savedAt  = now.toISOString();
+
+        const ownerKey  = owner ? owner.email : "";
+        // Replace mode is per user: only this user's folder with the same name is replaced.
+        const sameMine  = (e) => e.spriteName === safeName && spEntryOwner(e) === ownerKey;
+        // Sharing from the body wins; otherwise a replaced folder keeps its sharing.
+        const sharing   = spSharingOf(req.body, owner);
+        const sharedOf  = (prev) => sharing || { shared: !!(prev && prev.shared === true), sharedWith: spSharedWith(prev) };
+        const entryOf   = (prev, loc) => Object.assign({ id: entryId, spriteName: safeName, savedAt, hasCss: !!cssContent,
+            svgBytes: Buffer.byteLength(svgContent, "utf8"), cssBytes: cssContent ? Buffer.byteLength(cssContent, "utf8") : 0,
+            owner: owner || null }, sharedOf(prev), loc);
 
         const inStratus = shouldUseStratus(req);
 
         if (inStratus) {
-            const folderKey = `savedsprites/${entryId}`;
+            const folderKey = `savedsprites/${owner ? spSlug(owner.email) + "/" : ""}${entryId}`;
             await stratusPut(req, `${folderKey}/${safeName}.svg`, Buffer.from(svgContent, "utf8"), "image/svg+xml");
             if (cssContent) {
                 await stratusPut(req, `${folderKey}/${safeName}.css`, Buffer.from(cssContent, "utf8"), "text/css");
             }
             // Update index
-            let index;
-            try { index = JSON.parse((await stratusGet(req, "savedsprites/_index.json")).toString("utf8")); }
-            catch (_) { index = { entries: [] }; }
-            // Remove old entry with same spriteName if any (replace mode)
-            index.entries = index.entries.filter(e => e.spriteName !== safeName);
-            index.entries.unshift({ id: entryId, spriteName: safeName, savedAt, folderKey, hasCss: !!cssContent,
-                svgBytes: Buffer.byteLength(svgContent, "utf8"), cssBytes: cssContent ? Buffer.byteLength(cssContent, "utf8") : 0 });
-            await stratusPut(req, "savedsprites/_index.json", Buffer.from(JSON.stringify(index, null, 2), "utf8"), "application/json");
-            console.log(`[save-sprite] Saved to Stratus: ${folderKey}`);
-            return res.json({ success: true, id: entryId, spriteName: safeName, savedAt, message: "Sprite saved to Stratus" });
+            const index = await spReadIndex(req);
+            const prev  = (index.entries || []).find(sameMine) || null;
+            if (prev && prev.folderKey && prev.folderKey !== folderKey) {
+                await Promise.all([
+                    stratusDelete(req, `${prev.folderKey}/${prev.spriteName}.svg`),
+                    prev.hasCss ? stratusDelete(req, `${prev.folderKey}/${prev.spriteName}.css`) : Promise.resolve()
+                ]);
+            }
+            index.entries = (index.entries || []).filter(e => !sameMine(e));
+            const entry = entryOf(prev, { folderKey });
+            index.entries.unshift(entry);
+            await spWriteIndex(req, index);
+            console.log(`[save-sprite] Saved to Stratus: ${folderKey}${owner ? ` by ${owner.email}` : ""}${entry.shared ? " (shared)" : ""}`);
+            return res.json({ success: true, id: entryId, spriteName: safeName, savedAt, owner: entry.owner, shared: entry.shared, sharedWith: entry.sharedWith, message: "Sprite saved to Stratus" });
         }
 
         // ── Local disk fallback ───────────────────────────────────────────────
-        const localDir = path.join(LOCAL_SP_DIR, entryId);
+        const localDir = path.join(LOCAL_SP_DIR, owner ? spSlug(owner.email) : "", entryId);
         fs.mkdirSync(localDir, { recursive: true });
         fs.writeFileSync(path.join(localDir, `${safeName}.svg`), svgContent, "utf8");
         if (cssContent) fs.writeFileSync(path.join(localDir, `${safeName}.css`), cssContent, "utf8");
 
-        const idx = localSpRead();
-        // Replace existing entry with same spriteName
-        idx.entries = idx.entries.filter(e => e.spriteName !== safeName);
-        idx.entries.unshift({ id: entryId, spriteName: safeName, savedAt, localDir, hasCss: !!cssContent,
-            svgBytes: Buffer.byteLength(svgContent, "utf8"), cssBytes: cssContent ? Buffer.byteLength(cssContent, "utf8") : 0 });
+        const idx  = localSpRead();
+        const prev = idx.entries.find(sameMine) || null;
+        if (prev && prev.localDir && prev.localDir !== localDir) { try { fs.rmSync(prev.localDir, { recursive: true, force: true }); } catch (_) {} }
+        idx.entries = idx.entries.filter(e => !sameMine(e));
+        const entry = entryOf(prev, { localDir });
+        idx.entries.unshift(entry);
         localSpWrite(idx);
 
         console.log(`[save-sprite] Saved locally: ${localDir}`);
-        return res.json({ success: true, id: entryId, spriteName: safeName, savedAt, message: "Sprite saved locally" });
+        return res.json({ success: true, id: entryId, spriteName: safeName, savedAt, owner: entry.owner, shared: entry.shared, sharedWith: entry.sharedWith, message: "Sprite saved locally" });
 
     } catch (err) {
         console.error("[save-sprite]", err);
@@ -829,41 +924,63 @@ app.post("/api/save-sprite", async (req, res) => {
 // ===================================
 app.get("/api/list-saved-sprites", async (req, res) => {
     try {
+        const viewer    = await spViewer(req);
         const inStratus = shouldUseStratus(req);
+        // Admins get every user's folders (the client groups them per user); ?scope=mine narrows to their own.
+        const mineOnly  = String(req.query.scope || "") === "mine";
+        const visible   = (entries) => (entries || []).filter(e => spCanSee(e, viewer) && (!mineOnly || spIsMine(e, viewer) || !spEntryOwner(e)));
 
         if (inStratus) {
-            let index;
-            try { index = JSON.parse((await stratusGet(req, "savedsprites/_index.json")).toString("utf8")); }
-            catch (_) { index = { entries: [] }; }
-            const sprites = (index.entries || []).map(e => ({
-                id:         e.id,
-                spriteName: e.spriteName,
-                savedAt:    e.savedAt || null,
-                folderKey:  e.folderKey,
-                hasCss:     !!e.hasCss,
-                svgBytes:   e.svgBytes || 0,   // 0 for entries saved before sizes were recorded (the client measures them)
-                cssBytes:   e.cssBytes || 0
-            }));
-            return res.json({ success: true, sprites });
+            const index   = await spReadIndex(req);
+            const sprites = visible(index.entries).map(e => spPublic(e, viewer));
+            return res.json({ success: true, sprites, viewer });
         }
 
         // ── Local disk fallback ───────────────────────────────────────────────
         const idx = localSpRead();
-        const sprites = idx.entries.map(e => ({
-            id:         e.id,
-            spriteName: e.spriteName,
-            savedAt:    e.savedAt || null,
-            folderKey:  `local:${e.id}`,
-            hasCss:     !!e.hasCss,
-            svgBytes:   e.svgBytes || localFileSize(e.localDir, `${e.spriteName}.svg`),
-            cssBytes:   e.cssBytes || (e.hasCss ? localFileSize(e.localDir, `${e.spriteName}.css`) : 0),
-            localDir:   e.localDir
+        const sprites = visible(idx.entries).map(e => spPublic(e, viewer, {
+            folderKey: `local:${e.id}`,
+            svgBytes:  e.svgBytes || localFileSize(e.localDir, `${e.spriteName}.svg`),
+            cssBytes:  e.cssBytes || (e.hasCss ? localFileSize(e.localDir, `${e.spriteName}.css`) : 0),
+            localDir:  e.localDir
         }));
-        return res.json({ success: true, sprites });
+        return res.json({ success: true, sprites, viewer });
 
     } catch (err) {
         console.error("[list-saved-sprites]", err);
         return res.status(500).json({ success: false, message: err.message || "List failed" });
+    }
+});
+
+// ===================================
+// SHARE / UNSHARE A SAVED SPRITE (owner or admin)
+// POST /api/saved-sprite/:id/share   Body: { shared: true } (all users) | { sharedWith: [emails] } | { shared: false } (private)
+// Shared folders are listed for every signed-in user (or the chosen users); private ones only for their owner (and admins).
+// ===================================
+app.post("/api/saved-sprite/:id/share", async (req, res) => {
+    try {
+        const entryId = req.params.id;
+        const viewer  = await spViewer(req);
+        const inStratus = shouldUseStratus(req);
+
+        const index = inStratus ? await spReadIndex(req) : localSpRead();
+        const entry = (index.entries || []).find(e => e.id === entryId);
+        if (!entry) return res.status(404).json({ success: false, message: "Not found" });
+        if (!spCanManage(entry, viewer)) return res.status(403).json({ success: false, message: "Only the owner or an admin can change sharing" });
+
+        // The owner is never in their own list (an admin changing it keeps it that way).
+        const sharing = spSharingOf(req.body, entry.owner || null) || { shared: false, sharedWith: [] };
+        const anyone  = sharing.shared || sharing.sharedWith.length > 0;
+        entry.shared = sharing.shared;
+        entry.sharedWith = sharing.sharedWith;
+        entry.sharedAt = anyone ? new Date().toISOString() : null;
+        entry.sharedBy = anyone ? (viewer.email || null) : null;
+        if (inStratus) await spWriteIndex(req, index); else localSpWrite(index);
+        console.log(`[saved-sprite/share] ${entryId} shared=${sharing.shared} users=${sharing.sharedWith.length} by ${viewer.email || "anonymous"}`);
+        return res.json({ success: true, id: entryId, shared: sharing.shared, sharedWith: sharing.sharedWith });
+    } catch (err) {
+        console.error("[saved-sprite/share]", err);
+        return res.status(500).json({ success: false, message: err.message || "Share failed" });
     }
 });
 
@@ -908,19 +1025,20 @@ app.delete("/api/delete-saved-sprite/:id", async (req, res) => {
     try {
         const entryId   = req.params.id;
         const inStratus = shouldUseStratus(req);
+        const viewer    = await spViewer(req);
+        const forbidden = () => res.status(403).json({ success: false, message: "Only the owner or an admin can delete this sprite" });
 
         if (inStratus) {
-            let index;
-            try { index = JSON.parse((await stratusGet(req, "savedsprites/_index.json")).toString("utf8")); }
-            catch (_) { index = { entries: [] }; }
+            const index = await spReadIndex(req);
             const entry = (index.entries || []).find(e => e.id === entryId);
             if (!entry) return res.status(404).json({ success: false, message: "Not found" });
+            if (!spCanManage(entry, viewer)) return forbidden();
             await Promise.all([
                 stratusDelete(req, `${entry.folderKey}/${entry.spriteName}.svg`),
                 entry.hasCss ? stratusDelete(req, `${entry.folderKey}/${entry.spriteName}.css`) : Promise.resolve()
             ]);
             index.entries = index.entries.filter(e => e.id !== entryId);
-            await stratusPut(req, "savedsprites/_index.json", Buffer.from(JSON.stringify(index, null, 2), "utf8"), "application/json");
+            await spWriteIndex(req, index);
             return res.json({ success: true });
         }
 
@@ -928,6 +1046,7 @@ app.delete("/api/delete-saved-sprite/:id", async (req, res) => {
         const idx   = localSpRead();
         const entry = idx.entries.find(e => e.id === entryId);
         if (!entry) return res.status(404).json({ success: false, message: "Not found" });
+        if (!spCanManage(entry, viewer)) return forbidden();
         if (entry.localDir) { try { fs.rmSync(entry.localDir, { recursive: true, force: true }); } catch (_) {} }
         idx.entries = idx.entries.filter(e => e.id !== entryId);
         localSpWrite(idx);

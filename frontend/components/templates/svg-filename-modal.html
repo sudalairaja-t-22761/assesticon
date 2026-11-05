@@ -25,6 +25,12 @@
         <input type="text" id="fnameFolder" value="sprite-icons" class="form-input" placeholder="e.g. my-sprite-folder" autocomplete="off" spellcheck="false">
       </div>
 
+      <!-- Share option (Save to Project only): a saved folder is private to the user who saved it unless shared -->
+      <div class="form-group hidden" id="fnameShareGroup" style="margin-top:12px;">
+        <label>Share</label>
+        <div id="fnameSharePicker"></div>
+      </div>
+
       <!-- Repository commit option (Save to Project only, signed-in users) -->
       <div class="form-group hidden ml-repo-group" id="fnameRepoGroup">
         <label class="checkbox-label">

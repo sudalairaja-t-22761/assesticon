@@ -168,6 +168,7 @@
     state.sourceCssClasses = {};
     state.sourceCssDims = {};
     state.sourceSavedFolder = '';
+    state.sourceSavedShared = false; state.sourceSavedSharedWith = [];
     state.originalSpriteWidth = 0;
     state.originalSpriteHeight = 0;
     state.newSpriteBaseName = '';
@@ -272,6 +273,8 @@
     // Where the files came from (set after the mode switch, which clears it).
     if (state.masterLibrary) state.masterLibrary.source = pair.repoSource || null;
     state.sourceSavedFolder = pair.savedFolder || '';
+    state.sourceSavedShared = !!pair.savedShared;
+    state.sourceSavedSharedWith = pair.savedSharedWith || [];
     state.mergedCssRules = [];
     state.mergedCssVars = [];
     state.icons = state.icons.filter(function (i) { return !i.mergedFrom; });
@@ -298,6 +301,7 @@
       $('#spriteDropZone').removeClass('loading');
       if (state.masterLibrary) state.masterLibrary.source = null;
       state.sourceSavedFolder = '';
+      state.sourceSavedShared = false; state.sourceSavedSharedWith = [];
       state.mergedCssRules = [];
       state.mergedCssVars = [];
       state.icons = state.icons.filter(function (i) { return !i.mergedFrom; });
@@ -456,9 +460,16 @@
   }
   // ─────────────────────────────────────────────────────────────────────────────
 
-  SF.saveToProject = function (folderName, svgName, cssName) {
+  /**
+   * Save the generated sprite (+ CSS) to the server under the signed-in user's folder.
+   * opts.shared = true lists the folder for every user; opts.sharedWith = [emails] for those users only;
+   * otherwise only the owner and admins see it.
+   */
+  SF.saveToProject = function (folderName, svgName, cssName, opts) {
     var spriteName = String(svgName || folderName || 'sprite').replace(/\.svg$/i, '').trim();
     if (!spriteName) spriteName = 'sprite';
+    var shared = !!(opts && opts.shared);
+    var sharedWith = shared || !opts || !opts.sharedWith ? [] : opts.sharedWith;
 
     $.ajax({
       url: _joinUrl(CATALYST_API_BASE, 'api/save-sprite'),
@@ -469,7 +480,9 @@
       data: JSON.stringify({
         spriteName: spriteName,
         svgContent: state.generatedSVG,
-        cssContent: state.generatedCSS || ''
+        cssContent: state.generatedCSS || '',
+        shared: shared,
+        sharedWith: sharedWith
       }),
       success: function (res) {
         if (_isCatalystError(res) || (res && res.success === false)) {
@@ -478,7 +491,7 @@
         }
 
         _clearGeneratedState();
-        SF.showToast('Saved sprite to server');
+        SF.showToast(shared || sharedWith.length ? 'Saved sprite · ' + SF.spriteShare.describe({ shared: shared, sharedWith: sharedWith }) : 'Saved sprite to your folders');
         SF.loadSavedFolders();
       },
       error: function (xhr) {
@@ -512,20 +525,22 @@
       return;
     }
 
+    var scope = $('#savedScope').val() === 'mine' ? '?scope=mine' : '';
     $.ajax({
-      url: _joinUrl(CATALYST_API_BASE, 'api/list-saved-sprites'),
+      url: _joinUrl(CATALYST_API_BASE, 'api/list-saved-sprites' + scope),
       type: 'GET',
       dataType: 'json',
       headers: _authHeaders(),
       success: function (data) {
         var sprites = (data && data.sprites) || [];
+        _savedViewer = (data && data.viewer) || null;
         var folders = sprites.map(function (sprite) {
           var spriteName = String(sprite.spriteName || 'sprite');
           var svgFileName = spriteName + '.svg';
           var svgKey = sprite.folderKey ? sprite.folderKey + '/' + svgFileName : null;
           var cssKey = sprite.hasCss && sprite.folderKey ? sprite.folderKey + '/' + spriteName + '.css' : null;
-          var files = [{ name: svgFileName, size: 0 }];
-          if (sprite.hasCss) files.push({ name: spriteName + '.css', size: 0 });
+          var files = [{ name: svgFileName, size: sprite.svgBytes || 0 }];
+          if (sprite.hasCss) files.push({ name: spriteName + '.css', size: sprite.cssBytes || 0 });
           // Build openPath so View button works: route through /api/get-sprite-file
           var openPath = svgKey ? _joinUrl(CATALYST_API_BASE, 'api/get-sprite-file?key=' + encodeURIComponent(svgKey)) : '';
           return {
@@ -539,7 +554,13 @@
             svgKey: svgKey,
             cssKey: cssKey,
             openPath: openPath,
-            canDelete: true,
+            owner: sprite.owner || null,
+            shared: !!sprite.shared,
+            sharedWith: sprite.sharedWith || [],
+            sharedWithMe: !!sprite.sharedWithMe,
+            isMine: !!sprite.isMine,
+            canManage: sprite.canManage !== false,
+            canDelete: sprite.canManage !== false,
             _hosted: true
           };
         });
@@ -561,15 +582,191 @@
     });
   };
 
+  // Who is looking (from the server: { email, name, role }) and the current search text.
+  var _savedViewer = null;
+  var _savedSearch = '';
+
+  function _savedEsc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function _savedFmtDate(isoStr) {
+    if (!isoStr) return '';
+    try {
+      var d = new Date(isoStr);
+      var pad = function (n) { return String(n).padStart(2, '0'); };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+        ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    } catch (e) { return isoStr; }
+  }
+
+  function _svgToDataUri(svgMarkup) {
+    return 'data:image/svg+xml;base64,' + window.btoa(unescape(encodeURIComponent(svgMarkup)));
+  }
+
+  /** Reference used on card buttons: the server id when there is one (names can repeat across users). */
+  function _savedRef(folder) { return String(folder.id || folder.name || ''); }
+
+  function _savedMatches(folder, q) {
+    if (!q) return true;
+    var hay = [folder.name, folder.owner && folder.owner.name, folder.owner && folder.owner.email]
+      .concat((folder.files || []).map(function (f) { return f && f.name; }))
+      .filter(Boolean).join(' ').toLowerCase();
+    return hay.indexOf(q) !== -1;
+  }
+
+  /** One saved-folder card. */
+  function _savedCardHtml(folder, viewer) {
+    var openPath = folder.openPath || '';
+    var ref = _savedRef(folder);
+    var name = _savedEsc(folder.name);
+    var ownerName = folder.owner && (folder.owner.name || folder.owner.email);
+    var isMine = !!folder.isMine || !!folder._ls;
+    var canManage = folder.canManage !== false && folder.canDelete !== false;
+    var html = '';
+
+    html += '<div class="saved-folder-card" data-folder="' + _savedEsc(ref) + '" data-entry-id="' + _savedEsc(folder.id || '') + '">';
+    html += '<div class="saved-folder-header">';
+    html += '<div class="saved-folder-icon">';
+    html += '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">';
+    html += '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>';
+    html += '</svg></div>';
+    html += '<div class="saved-folder-name-wrap">';
+    html += '<div class="saved-folder-name">' + name + '</div>';
+    if (folder.savedAt) html += '<div class="saved-folder-date">' + _savedFmtDate(folder.savedAt) + '</div>';
+    // Who saved it
+    html += '<div class="saved-folder-owner">';
+    html += '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+    if (folder._ls) html += '<span>This browser only</span>';
+    else if (isMine) html += '<span class="saved-you">You</span>' + (ownerName ? '<span>· ' + _savedEsc(ownerName) + '</span>' : '');
+    else if (ownerName) html += '<span title="' + _savedEsc(folder.owner.email || '') + '">' + _savedEsc(ownerName) + '</span>';
+    else html += '<span>Older save · no owner</span>';
+    html += '</div>';
+    html += '</div>';
+    if (!folder._ls) {
+      var withList = folder.sharedWith || [];
+      var PEOPLE = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+      html += folder.shared
+        ? '<span class="saved-shared-badge" title="Visible to every signed-in user"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Shared</span>'
+        : withList.length
+          ? '<span class="saved-shared-badge saved-shared-badge--people" title="Shared with: ' + _savedEsc(withList.map(SF.spriteShare.nameOf).join(', ')) + '">' + PEOPLE + ' ' + withList.length + (withList.length === 1 ? ' person' : ' people') + '</span>'
+          : folder.sharedWithMe && !isMine
+            ? '<span class="saved-shared-badge saved-shared-badge--people" title="The owner shared this folder with you">' + PEOPLE + ' Shared with you</span>'
+            : (folder.owner ? '<span class="saved-shared-badge saved-shared-badge--private" title="Only the owner and admins see this folder">Private</span>' : '');
+    }
+    html += '</div>';
+    if (folder.previewSvg) {
+      html += '<div class="saved-folder-preview">';
+      html += '<img src="' + _svgToDataUri(folder.previewSvg) + '" alt="' + name + ' preview" loading="lazy">';
+      html += '</div>';
+    }
+    html += '<div class="saved-folder-files">';
+    (folder.files || []).forEach(function (file) {
+      var ext = file.name.split('.').pop().toLowerCase();
+      var badgeClass = ext === 'svg' ? 'svg-badge' : 'css-badge';
+      if (!openPath && ext === 'svg' && !folder._ls && !folder._hosted) {
+        openPath = 'saved-sprites/' + encodeURIComponent(folder.name) + '/' + encodeURIComponent(file.name);
+      }
+      html += '<div class="saved-file-item">';
+      html += '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">';
+      html += '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>';
+      html += '</svg>';
+      html += '<span class="saved-file-name">' + _savedEsc(file.name) + '</span>';
+      html += '<span class="saved-file-badge ' + badgeClass + '">' + ext + '</span>';
+      html += '<span class="saved-file-size">' + SF.formatBytes(file.size) + '</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+    html += '<div class="saved-folder-actions">';
+    html += '<button class="btn btn-primary btn-sm saved-edit-btn" data-folder="' + _savedEsc(ref) + '" data-name="' + name + '" title="Open SVG + CSS in Update Sprite to add or replace icons">';
+    html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+    html += ' Add / Replace Icons';
+    html += '</button>';
+    html += '<button class="btn btn-ghost btn-sm saved-download-btn" data-folder="' + _savedEsc(ref) + '" data-name="' + name + '">';
+    html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+    html += ' Download';
+    html += '</button>';
+    html += '<button class="btn btn-ghost btn-sm saved-open-btn" data-folder="' + _savedEsc(ref) + '" data-name="' + name + '" data-open-path="' + SF.escapeAttr(openPath) + '"' + (folder._ls ? ' data-ls="1"' : '') + '>';
+    html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+    html += ' View';
+    html += '</button>';
+    if (folder.id && !folder._ls && canManage) {
+      var anyShare = folder.shared || (folder.sharedWith || []).length > 0;
+      html += '<button class="btn btn-ghost btn-sm saved-share-btn' + (anyShare ? ' is-shared' : '') + '" data-entry-id="' + _savedEsc(folder.id) + '" data-name="' + name + '" title="Choose who can see this folder: private, all users or specific users">';
+      html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg> Share';
+      html += '</button>';
+    }
+    // Delete: enabled only for the owner (or an admin); shared folders of other users show a locked button.
+    if (canManage) {
+      html += '<button class="btn btn-ghost btn-sm saved-delete-btn" data-folder="' + _savedEsc(ref) + '" data-name="' + name + '" title="Delete this folder (asks first)">';
+      html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+      html += ' Delete';
+      html += '</button>';
+    } else {
+      var lockTip = 'Only ' + (ownerName ? _savedEsc(ownerName) : 'the owner') + ' or an admin can delete this folder';
+      html += '<button class="btn btn-ghost btn-sm saved-delete-btn saved-delete-btn--locked" disabled aria-disabled="true" tabindex="-1" data-tooltip="' + lockTip + '" title="' + lockTip + '">';
+      html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+      html += ' Delete';
+      html += '</button>';
+    }
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
   /**
-   * Render saved folders grid
+   * Group folders per user (asset-folder style). Admins see every user as a group; everyone else sees
+   * "My saved folders" and "Shared by other users".
+   * @returns {Array<{key, name, email, cls, folders}>}
+   */
+  function _savedGroups(folders, viewer) {
+    var isAdmin = viewer.role === 'admin';
+    var me = String(viewer.email || '').toLowerCase();
+    var map = {}, order = [];
+    function group(key, name, email, cls) {
+      if (!map[key]) { map[key] = { key: key, name: name, email: email || '', cls: cls || '', folders: [] }; order.push(key); }
+      return map[key];
+    }
+    folders.forEach(function (f) {
+      var ownerEmail = String((f.owner && f.owner.email) || '').toLowerCase();
+      var ownerName = (f.owner && (f.owner.name || f.owner.email)) || '';
+      if (f._ls || f.isMine || (ownerEmail && ownerEmail === me)) {
+        group('me', isAdmin ? (viewer.name || viewer.email || 'My saved folders') : 'My saved folders', isAdmin ? me : '', 'saved-user-group--me').folders.push(f);
+      } else if (isAdmin && ownerEmail) {
+        group('u:' + ownerEmail, ownerName, ownerEmail, '').folders.push(f);
+      } else if (!ownerEmail) {
+        group('legacy', isAdmin ? 'Older saves (no owner)' : 'Shared with everyone', '', 'saved-user-group--legacy').folders.push(f);
+      } else {
+        group('shared', 'Shared by other users', '', 'saved-user-group--shared').folders.push(f);
+      }
+    });
+    // Mine first, then users by name, then shared / older saves.
+    var tail = { shared: 1, legacy: 2 };
+    order.sort(function (a, b) {
+      if (a === 'me') return -1; if (b === 'me') return 1;
+      var ta = tail[a] || 0, tb = tail[b] || 0;
+      if (ta !== tb) return ta - tb;
+      return map[a].name.localeCompare(map[b].name);
+    });
+    return order.map(function (k) { return map[k]; });
+  }
+
+  /**
+   * Render saved folders grouped per user, filtered by the search box.
    */
   SF.renderSavedFolders = function (folders) {
     _savedFoldersCache = Array.isArray(folders) ? folders.slice() : [];
     if (typeof SF.refreshSpriteSourceOptions === 'function') SF.refreshSpriteSourceOptions();
     var $list = $('#savedFoldersList');
+    var viewer = _savedViewer || {};
+    var isAdmin = viewer.role === 'admin';
+    $('#savedScope').toggleClass('hidden', !isAdmin);
+    $('#savedOwnerTag').text(viewer.email ? (isAdmin ? '· Admin view: all users' : '· ' + (viewer.name || viewer.email)) : '');
+
     if (!folders.length) {
-      $list.html(
+      $list.removeClass('saved-grouped').html(
         '<div class="saved-empty">' +
           '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">' +
             '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>' +
@@ -580,86 +777,56 @@
       return;
     }
 
-    function svgToDataUri(svgMarkup) {
-      return 'data:image/svg+xml;base64,' + window.btoa(unescape(encodeURIComponent(svgMarkup)));
-    }
-
-    function _fmtDate(isoStr) {
-      if (!isoStr) return '';
-      try {
-        var d = new Date(isoStr);
-        var pad = function (n) { return String(n).padStart(2, '0'); };
-        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
-          ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-      } catch (e) { return isoStr; }
+    var q = $.trim(_savedSearch).toLowerCase();
+    var shown = folders.filter(function (f) { return _savedMatches(f, q); });
+    if (!shown.length) {
+      $list.removeClass('saved-grouped').html(
+        '<div class="saved-empty"><p>No saved folders match <strong>' + _savedEsc(_savedSearch) + '</strong>.</p></div>');
+      return;
     }
 
     var html = '';
-    folders.forEach(function (folder) {
-      var openPath = folder.openPath || '';
-      var entryId = folder.id || '';
-      html += '<div class="saved-folder-card" data-folder="' + folder.name + '" data-entry-id="' + SF.escapeAttr(entryId) + '">';
-      html += '<div class="saved-folder-header">';
-      html += '<div class="saved-folder-icon">';
-      html += '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">';
-      html += '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>';
-      html += '</svg></div>';
-      html += '<div class="saved-folder-name-wrap">';
-      html += '<div class="saved-folder-name">' + folder.name + '</div>';
-      if (folder.savedAt) {
-        html += '<div class="saved-folder-date">' + _fmtDate(folder.savedAt) + '</div>';
-      }
-      html += '</div>';
-      html += '</div>';
-      if (folder.previewSvg) {
-        html += '<div class="saved-folder-preview">';
-        html += '<img src="' + svgToDataUri(folder.previewSvg) + '" alt="' + folder.name + ' preview" loading="lazy">';
-        html += '</div>';
-      }
-      html += '<div class="saved-folder-files">';
-      (folder.files || []).forEach(function (file) {
-        var ext = file.name.split('.').pop().toLowerCase();
-        var badgeClass = ext === 'svg' ? 'svg-badge' : 'css-badge';
-        if (!openPath && ext === 'svg' && !folder._ls && !folder._hosted) {
-          openPath = 'saved-sprites/' + encodeURIComponent(folder.name) + '/' + encodeURIComponent(file.name);
-        }
-        html += '<div class="saved-file-item">';
-        html += '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">';
-        html += '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>';
-        html += '</svg>';
-        html += '<span class="saved-file-name">' + file.name + '</span>';
-        html += '<span class="saved-file-badge ' + badgeClass + '">' + ext + '</span>';
-        html += '<span class="saved-file-size">' + SF.formatBytes(file.size) + '</span>';
-        html += '</div>';
-      });
-      html += '</div>';
-      html += '<div class="saved-folder-actions">';
-      html += '<button class="btn btn-primary btn-sm saved-edit-btn" data-folder="' + SF.escapeAttr(folder.name) + '" title="Open SVG + CSS in Update Sprite to add or replace icons">';
-      html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
-      html += ' Add / Replace Icons';
-      html += '</button>';
-      html += '<button class="btn btn-ghost btn-sm saved-download-btn" data-folder="' + folder.name + '">';
-      html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-      html += ' Download';
-      html += '</button>';
-      html += '<button class="btn btn-ghost btn-sm saved-open-btn" data-folder="' + folder.name + '" data-open-path="' + SF.escapeAttr(openPath) + '"' + (folder._ls ? ' data-ls="1"' : '') + '>';
-      html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
-      html += ' View';
-      html += '</button>';
-      html += '<button class="btn btn-ghost btn-sm saved-delete-btn" data-folder="' + folder.name + '" style="color:var(--danger);"' + (folder.canDelete === false ? ' disabled title="Delete is not available in hosted mode"' : '') + '>';
-      html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
-      html += ' Delete';
-      html += '</button>';
-      html += '</div>';
-      html += '</div>';
+    _savedGroups(shown, viewer).forEach(function (g) {
+      var sharedCount = g.folders.filter(function (f) { return f.shared; }).length;
+      var initial = (g.name || '?').trim().charAt(0).toUpperCase();
+      html += '<details class="saved-user-group ' + g.cls + '" open data-group="' + _savedEsc(g.key) + '">';
+      html += '<summary>';
+      html += '<span class="saved-user-avatar">' + _savedEsc(initial) + '</span>';
+      html += '<span><div class="saved-user-name">' + _savedEsc(g.name) + '</div>' +
+        (g.email ? '<div class="saved-user-email">' + _savedEsc(g.email) + '</div>' : '') + '</span>';
+      html += '<span class="saved-user-count"><span>' + g.folders.length + ' folder' + (g.folders.length === 1 ? '' : 's') + '</span>' +
+        (sharedCount ? '<span>' + sharedCount + ' shared</span>' : '') + '</span>';
+      html += '</summary>';
+      html += '<div class="saved-folders-grid">';
+      g.folders.forEach(function (f) { html += _savedCardHtml(f, viewer); });
+      html += '</div></details>';
     });
-    $list.html(html);
+    $list.addClass('saved-grouped').html(html);
   };
 
-  function _findFolderByName(folderName) {
-    return (_savedFoldersCache || []).find(function (f) {
-      return f && f.name === folderName;
-    }) || null;
+  // Search (folder name, file name, user name or email) — filters the cached listing.
+  $(document).on('input search', '#savedSearch', function () {
+    _savedSearch = $(this).val() || '';
+    SF.renderSavedFolders(_savedFoldersCache);
+  });
+  // Admin scope: all users / only mine.
+  $(document).on('change', '#savedScope', function () { SF.loadSavedFolders(); });
+
+  // Share a folder (owner or admin): private, all users or specific users.
+  $(document).on('click', '.saved-share-btn', function () {
+    var id = $(this).data('entryId');
+    if (!id) return;
+    var folder = (_savedFoldersCache || []).filter(function (f) { return String(f.id) === String(id); })[0] || {};
+    SF.spriteShare.open({ id: id, name: $(this).data('name') || folder.name || id, shared: !!folder.shared, sharedWith: folder.sharedWith || [] },
+      function () { SF.loadSavedFolders(); });
+  });
+
+  /** Find a saved folder by its server id, or by name (browser-storage entries and older callers). */
+  function _findFolderByName(ref) {
+    var list = _savedFoldersCache || [];
+    var key = String(ref == null ? '' : ref);
+    return list.find(function (f) { return f && f.id && String(f.id) === key; }) ||
+      list.find(function (f) { return f && f.name === key; }) || null;
   }
 
   function _downloadZip(folderName, svgName, svgContent, cssName, cssContent) {
@@ -741,11 +908,14 @@
 
   /** Open a saved sprite (SVG + CSS) in Update Sprite mode. */
   /** @returns {Promise<boolean>} whether the sprite was loaded */
-  SF.editSavedSprite = function (folderName) {
-    return SF.fetchSavedSpritePair(folderName).then(function (pair) {
+  SF.editSavedSprite = function (ref) {
+    var folder = _findFolderByName(ref);
+    return SF.fetchSavedSpritePair(ref).then(function (pair) {
       pair.label = 'Saved Sprites';
-      pair.sourceKey = 'saved:' + folderName;
-      pair.savedFolder = folderName;
+      pair.sourceKey = 'saved:' + (folder ? _savedRef(folder) : String(ref));
+      pair.savedFolder = folder ? folder.name : String(ref);
+      pair.savedShared = !!(folder && folder.shared && (folder.isMine || folder._ls));
+      pair.savedSharedWith = folder && folder.isMine ? (folder.sharedWith || []) : [];
       return !!SF.loadSpritePair(pair);
     }).catch(function (err) { SF.showToast(err.message || 'Could not open saved sprite'); return false; });
   };
@@ -809,9 +979,11 @@
   /**
    * Delete a saved sprite folder — uses entry id from cache when available
    */
-  SF.deleteSavedFolder = function (folderName) {
+  SF.deleteSavedFolder = function (ref) {
+    var cached = _findFolderByName(ref);
+    var folderName = cached ? cached.name : String(ref);
     var lsAll = SF.lsFolders.get();
-    var isLocal = lsAll.some(function (f) { return f.name === folderName && f._ls; });
+    var isLocal = lsAll.some(function (f) { return f.name === folderName && f._ls; }) && !(cached && cached.id);
     if (isLocal) {
       SF.lsFolders.remove(folderName);
       SF.showToast('Deleted ' + folderName);
@@ -819,8 +991,7 @@
       return;
     }
 
-    // Look up the entry id from the render cache
-    var cached = (_savedFoldersCache || []).find(function (f) { return f && f.name === folderName; });
+    // Entry id from the render cache
     var entryId = cached && cached.id;
 
     if (entryId) {

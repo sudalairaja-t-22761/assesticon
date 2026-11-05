@@ -35,7 +35,6 @@
     return false;
   }
   var IS_LOCAL_HOST = _isLocalLikeHost();
-  var _deleteConfirmClicks = { saved: {}, library: {} };
   var _authAjaxPrefilterInstalled = false;
 
   function _isHostedAuthEnabled() {
@@ -288,19 +287,6 @@
     _handleHostedUnauthorized(message);
   };
 
-  function _toastDeleteConfirm(scope, key, label) {
-    var now = Date.now();
-    var prev = (_deleteConfirmClicks[scope] && _deleteConfirmClicks[scope][key]) || 0;
-    if (now - prev <= 4000) {
-      delete _deleteConfirmClicks[scope][key];
-      return true;
-    }
-
-    _deleteConfirmClicks[scope][key] = now;
-    SF.showToast('Click Delete again to confirm removal of "' + label + '"');
-    return false;
-  }
-
   function _extractSvgName(openPath) {
     if (!openPath) return '';
     var input = String(openPath).trim();
@@ -541,6 +527,8 @@
     $('#fnameFolderGroup').addClass('hidden').removeClass('ml-dimmed');
     $('#fnameRepoGroup').addClass('hidden');
     $('#fnameRepoCommit').prop('checked', false);
+    $('#fnameShareGroup').addClass('hidden').removeClass('ml-dimmed');
+    if (SF.spriteShare) SF.spriteShare.mount($('#fnameSharePicker'), null);
     $('#filenameModal .modal-header h3').html(
       '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
         '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>' +
@@ -1731,11 +1719,17 @@
           return;
         }
         
+        // Saved under the signed-in user's folders; Share picks private / all users / specific users.
+        var saveOpts = SF.spriteShare ? SF.spriteShare.read($('#fnameSharePicker')) : { shared: false };
+        if (!saveOpts.shared && $('#fnameSharePicker input[value=users]').is(':checked') && !saveOpts.sharedWith.length) {
+          SF.showToast('Pick at least one person to share with, or choose Private');
+          return;
+        }
         // For Add Sprite flow, check if CSS is needed
         if (!shouldIncludeCss) {
-          SF.saveToProject(folderName, spriteName + '.svg', null);
+          SF.saveToProject(folderName, spriteName + '.svg', null, saveOpts);
         } else {
-          SF.saveToProject(folderName, spriteName + '.svg', cssName + '.' + ext);
+          SF.saveToProject(folderName, spriteName + '.svg', cssName + '.' + ext, saveOpts);
         }
         
         resetFilenameModalLayout();
@@ -2015,6 +2009,9 @@
       $('#fnameCss').val(upd && state.sourceCssName ? state.sourceCssName : (state.newCssBaseName || state.sourceCssName || 'sprite'));
       $('#fnameFolder').val(upd ? (state.sourceSavedFolder || state.sourceSpriteName) : (state.newSpriteBaseName || state.sourceSpriteName || 'sprite-icons'));
       $('#fnameFolderGroup').removeClass('hidden');
+      // Sharing: a re-saved folder of mine keeps its sharing unless changed here.
+      $('#fnameShareGroup').toggleClass('hidden', !AUTH_ENABLED);
+      if (SF.spriteShare) SF.spriteShare.mount($('#fnameSharePicker'), upd ? { shared: !!state.sourceSavedShared, sharedWith: state.sourceSavedSharedWith || [] } : null);
       if (window.sfCssPreference === false || !state.generatedCSS) {
         $('#fnameCssGroup').addClass('hidden');
       }
@@ -2043,13 +2040,16 @@
 
     // Saved folders: delete
     $(document).on('click', '.saved-delete-btn', function () {
-      var name = $(this).data('folder');
+      if ($(this).is(':disabled') || $(this).hasClass('saved-delete-btn--locked')) return;   // not the owner / admin
+      var name = $(this).data('folder');          // server id (or name for browser-storage entries)
+      var label = $(this).data('name') || name;   // what the user sees
       if (!name) return;
-      if (!_toastDeleteConfirm('saved', String(name), String(name))) return;
-      if (name) {
-        SF.deleteSavedFolder(name);
-        if (typeof SF.loadLibraryFolders === 'function') SF.loadLibraryFolders();
-      }
+      SF.confirmDelete(String(label), { what: 'saved sprite folder', note: 'The SVG and CSS files in it are removed for everyone who can see this folder.' })
+        .then(function (yes) {
+          if (!yes) return;
+          SF.deleteSavedFolder(name);
+          if (typeof SF.loadLibraryFolders === 'function') SF.loadLibraryFolders();
+        });
     });
 
     // Saved folders: view (open files in new tabs)
@@ -2226,8 +2226,9 @@
       var iconId = $(this).data('iconId');
       var iconName = $(this).data('iconName') || 'this icon';
       if (!iconId) return;
-      if (!_toastDeleteConfirm('library', String(iconId), String(iconName))) return;
-      SF.deleteLibraryIcon(iconId);
+      SF.confirmDelete(String(iconName), { what: 'icon' }).then(function (yes) {
+        if (yes) SF.deleteLibraryIcon(iconId);
+      });
     });
 
     // ---- Doc Search ----

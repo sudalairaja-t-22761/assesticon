@@ -47,9 +47,18 @@
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
         </svg>
         Saved Sprite Folders
+        <span class="saved-owner-tag" id="savedOwnerTag" title="Folders are stored per user. Share a folder to show it to everyone."></span>
         <span class="panel-chevron"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></span>
       </h3>
-      <div class="panel-actions">
+      <div class="panel-actions saved-toolbar">
+        <label class="saved-search" title="Search by folder name, file name, user name or email">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="search" id="savedSearch" placeholder="Search folders or users…" autocomplete="off" spellcheck="false">
+        </label>
+        <select id="savedScope" class="saved-scope hidden" title="Admin: which users' folders to list">
+          <option value="all">All users</option>
+          <option value="mine">Only mine</option>
+        </select>
         <button class="btn btn-ghost btn-sm" id="refreshSavedBtn">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>

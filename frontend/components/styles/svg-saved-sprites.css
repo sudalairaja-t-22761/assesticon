@@ -407,3 +407,219 @@ select.form-input {
 .lib-floating-tooltip.visible {
   opacity: 1;
 }
+
+/* ── Per-user saved folders: toolbar, user groups, owner + shared badges ── */
+.saved-owner-tag {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.saved-toolbar { gap: 8px; flex-wrap: wrap; }
+
+.saved-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  height: 28px;
+  min-width: 220px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+}
+.saved-search:focus-within { border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-glow); }
+.saved-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.saved-search input::placeholder { color: var(--text-tertiary); }
+
+.saved-scope {
+  height: 28px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* When grouped per user the list is a column of groups, each holding its own card grid */
+.saved-folders-grid.saved-grouped { display: flex; flex-direction: column; gap: 10px; }
+
+.saved-user-group {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+.saved-user-group > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--radius);
+}
+.saved-user-group > summary::-webkit-details-marker { display: none; }
+.saved-user-group > summary:hover { background: var(--bg-hover); }
+.saved-user-group[open] > summary { border-bottom: 1px solid var(--border-light); border-radius: var(--radius) var(--radius) 0 0; }
+.saved-user-group > summary::before {
+  content: '';
+  width: 6px; height: 6px;
+  border-right: 2px solid var(--text-tertiary);
+  border-bottom: 2px solid var(--text-tertiary);
+  transform: rotate(-45deg);
+  transition: transform var(--transition);
+  flex-shrink: 0;
+}
+.saved-user-group[open] > summary::before { transform: rotate(45deg); }
+
+.saved-user-avatar {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.saved-user-group.saved-user-group--shared .saved-user-avatar,
+.saved-user-group.saved-user-group--legacy .saved-user-avatar { background: var(--success-bg); color: var(--success); }
+.saved-user-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.saved-user-email { font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }
+.saved-user-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  display: inline-flex;
+  gap: 8px;
+}
+.saved-user-group .saved-folders-grid { padding: 14px; }
+
+.saved-folder-owner {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+.saved-folder-owner svg { stroke: var(--text-tertiary); flex-shrink: 0; }
+.saved-folder-owner .saved-you { color: var(--accent-text); font-weight: 600; }
+
+.saved-shared-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  background: var(--success-bg);
+  color: var(--success);
+  white-space: nowrap;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+.saved-shared-badge--private { background: var(--bg-hover); color: var(--text-tertiary); }
+
+.saved-shared-badge--people { background: var(--accent-subtle); color: var(--accent-text); }
+
+.saved-share-btn.is-shared { color: var(--success); }
+
+/* ── Share picker (Save dialog + Share dialog): Private · All users · Specific users ── */
+.ssh { display: flex; flex-direction: column; gap: 10px; }
+.ssh-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.ssh-mode {
+  display: flex; align-items: flex-start; gap: 6px; padding: 8px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input);
+}
+.ssh-mode:hover { border-color: var(--border-focus); }
+.ssh-mode.is-on { border-color: var(--accent); background: var(--accent-subtle); }
+.ssh-mode input { margin: 2px 0 0; accent-color: var(--accent); flex-shrink: 0; }
+.ssh-mode span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ssh-mode b { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.ssh-mode small { font-size: 11px; color: var(--text-tertiary); line-height: 1.3; }
+.ssh-users { display: flex; flex-direction: column; gap: 8px; }
+.ssh-search {
+  width: 100%; box-sizing: border-box; padding: 6px 10px; font: inherit; font-size: 12px; color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input);
+}
+.ssh-search:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-glow); }
+.ssh-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 22px; align-items: center; }
+.ssh-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border-radius: 999px;
+  background: var(--accent-subtle); color: var(--accent-text); font-size: 12px; font-weight: 500; max-width: 100%;
+}
+.ssh-chip-x {
+  border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; line-height: 1;
+  width: 18px; height: 18px; border-radius: 50%; padding: 0;
+}
+.ssh-chip-x:hover { background: var(--accent-glow); }
+.ssh-empty, .ssh-note { font-size: 12px; color: var(--text-tertiary); }
+.ssh-note { padding: 10px; text-align: center; }
+.ssh-list {
+  max-height: 190px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: var(--radius);
+  background: var(--bg-input);
+}
+.ssh-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; cursor: pointer; text-align: left;
+  border: 0; border-bottom: 1px solid var(--border-light); background: transparent; color: var(--text-primary); font: inherit; font-size: 12px;
+}
+.ssh-row:last-child { border-bottom: 0; }
+.ssh-row:hover { background: var(--bg-hover); }
+.ssh-row.is-on { background: var(--bg-active); }
+.ssh-row input { margin: 0; accent-color: var(--accent); flex-shrink: 0; }
+.ssh-row-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ssh-row-mail { margin-left: auto; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ssh-add { color: var(--accent-text); }
+.ssh-folder { margin: 0 0 12px; font-size: 13px; color: var(--text-secondary); }
+.ssh-modal { width: 460px; }
+@media (max-width: 520px) { .ssh-modes { grid-template-columns: 1fr; } }
+
+.saved-group-empty { padding: 20px; font-size: 12px; color: var(--text-tertiary); text-align: center; }
+
+.form-hint-inline { color: var(--text-tertiary); font-weight: 400; }
+
+@media (max-width: 720px) {
+  .saved-search { min-width: 0; flex: 1 1 100%; }
+}
+
+/* Delete is only for the owner or an admin: active = red, locked = grey lock, no hover, not clickable */
+.saved-folder-actions .saved-delete-btn { color: var(--danger); }
+.saved-folder-actions .saved-delete-btn:hover { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
+.saved-folder-actions .btn:disabled,
+.saved-folder-actions .saved-delete-btn--locked {
+  color: var(--text-tertiary);
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+  border-style: dashed;
+  opacity: 0.75;
+  cursor: not-allowed;
+  pointer-events: auto;    /* keep the tooltip on hover */
+  box-shadow: none;
+  transform: none;
+}
+.saved-folder-actions .saved-delete-btn--locked:hover,
+.saved-folder-actions .saved-delete-btn--locked:active { background: var(--bg-hover); border-color: var(--border-light); color: var(--text-tertiary); transform: none; }

@@ -428,3 +428,17 @@
 [data-theme="dark"] .svgo-stats-bar {
   background: color-mix(in srgb, var(--success, #059669) 10%, var(--bg-panel));
 }
+
+/* ── Confirm dialog (delete yes / no) ── */
+.sf-confirm .modal.sf-confirm-modal { max-width: 420px; width: calc(100% - 32px); }
+.sf-confirm .modal-header h3 { display: flex; align-items: center; gap: 8px; }
+.sf-confirm-icon { display: inline-flex; color: var(--text-secondary); }
+.sf-confirm--danger .sf-confirm-icon { color: var(--danger); }
+.sf-confirm-msg { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-primary); word-break: break-word; }
+.sf-confirm-msg strong { font-weight: 600; }
+.sf-confirm-note { display: block; margin-top: 6px; font-size: 12px; color: var(--text-tertiary); }
+.sf-confirm-footer { display: flex; justify-content: flex-end; gap: 8px; }
+.sf-confirm-footer .btn { min-width: 96px; justify-content: center; }
+.btn.sf-confirm-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.sf-confirm-danger:hover { background: #b8271e; border-color: #b8271e; color: #fff; }
+.btn.sf-confirm-danger:focus-visible { outline: 2px solid var(--danger); outline-offset: 2px; }
