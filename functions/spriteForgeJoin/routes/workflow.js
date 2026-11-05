@@ -179,20 +179,14 @@ function createWorkflowRouter({ requireSession }) {
         res.json({ success: true, days, ...(await require("../lib/activity-log").summary(req, { days, limit: req.query.limit })) });
     }));
 
-    // People a saved sprite can be shared with: everyone who has signed in, plus members added by email. Name and
-    // email only, for any signed-in user (the share picker); the full /users list stays admin only.
+    // People a saved sprite can be shared with: the same Zoho org search as the Members dialog (type 2+ letters),
+    // name / email / photo / designation only. The person searching is left out (a folder is always theirs).
     router.get("/share-users", requireRole(), wrap(async (req, res) => {
-        const db = store.forRequest(req);
-        const [users, members] = await Promise.all([db.all("user_data"), db.all("members")]);
-        const self = norm(me(req).email), seen = new Set([self]), list = [];
-        for (const u of [...users.map((x) => ({ email: x.userEmail, name: x.userName })), ...members.map((x) => ({ email: x.userEmail, name: x.userName }))]) {
-            const email = norm(u.email);
-            if (!email || seen.has(email) || !email.includes("@")) continue;
-            seen.add(email);
-            list.push({ email, name: str(u.name, 200) || email });
-        }
-        list.sort((a, b) => a.name.localeCompare(b.name));
-        res.json({ success: true, users: list });
+        const out = await searchOrgUsers(req, req.query.q, false);
+        const self = norm(me(req).email);
+        out.users = out.users.filter((u) => u.email && norm(u.email) !== self)
+            .map((u) => ({ name: u.name || u.email, email: String(u.email).toLowerCase(), avatar: u.avatar || "", designation: u.designation || "", department: u.department || "" }));
+        res.json(out);
     }));
 
     router.get("/users", requireRole(["admin"]), wrap(async (req, res) => {
@@ -248,23 +242,26 @@ function createWorkflowRouter({ requireSession }) {
     }
 
     // Photos of the org users (People photo URLs need the org token, so the browser loads them here).
-    router.get("/org-users/photo", requireRole(["admin"]), async (req, res) => {
+    router.get("/org-users/photo", requireRole(), async (req, res) => {
         try {
-            const p = await orgUsers.fetchPhoto(req.query.u, await adminRefreshToken(req));
+            const p = await orgUsers.fetchPhoto(req.query.u, (await adminRefreshToken(req)) || (await anyAdminToken(req)));
             res.setHeader("Content-Type", p.type);
             res.setHeader("Cache-Control", "private, max-age=3600");
             res.send(p.buffer);
         } catch (_) { res.status(404).end(); }
     });
 
-    router.get("/org-users", requireRole(["admin"]), wrap(async (req, res) => {
-        let q = String(req.query.q || "").trim().toLowerCase();
-        // Nothing is loaded until the admin types: no list, and no Zoho/Cliq call (Cliq's quota is tight).
-        if (q.length < 2 && req.query.refresh !== "1") return res.json({ success: true, source: "zoho-org", total: 0, needQuery: true, warning: "", users: [] });
+    // Search the Zoho org (People + Cliq directory, with the admin's org token), falling back to the users who have
+    // signed in. Used by the Members dialog (admin) and the saved sprite Share picker (any signed-in user).
+    async function searchOrgUsers(req, q, fresh) {
+        q = String(q || "").trim().toLowerCase();
+        // Nothing is loaded until someone types: no list, and no Zoho/Cliq call (Cliq's quota is tight).
+        if (q.length < 2 && !fresh) return { success: true, source: "zoho-org", total: 0, needQuery: true, warning: "", users: [] };
         let users, source = "zoho-org", warning = "";
-        const refresh = await adminRefreshToken(req);
+        // The signed-in admin's org token, else any saved admin token (a non-admin has none of their own).
+        const refresh = (await adminRefreshToken(req)) || (await anyAdminToken(req));
         if (orgUsers.isConfigured(refresh) || (await store.forRequest(req).all("admin_tokens")).length) {
-            try { users = await loadOrgUsers(req, req.query.refresh === "1"); }
+            try { users = await loadOrgUsers(req, fresh); }
             catch (err) { warning = err.message + " — log out and sign in again to grant Zoho People access"; }
         } else {
             warning = "Zoho org list not connected yet: log out and sign in again (grants Zoho People access). Showing users who have logged in";
@@ -272,12 +269,12 @@ function createWorkflowRouter({ requireSession }) {
         if (users && orgUsers.isConfigured(refresh)) {
             // People shows a login only its own record; Cliq's directory search covers the rest of the org.
             try {
-                const extra = await orgUsers.cliqSearch(refresh || (await anyAdminToken(req)), q, req.query.refresh === "1");
+                const extra = await orgUsers.cliqSearch(refresh, q, fresh);
                 const have = new Set(users.map((u) => u.email.toLowerCase()));
                 const mine = q ? users.filter((u) => (u.name + " " + u.email + " " + (u.department || "")).toLowerCase().includes(q)) : users;
-                const fresh = extra.filter((u) => !have.has(u.email.toLowerCase()) &&
+                const more = extra.filter((u) => !have.has(u.email.toLowerCase()) &&
                     (!q || (u.name + " " + u.email).toLowerCase().includes(q))); // Cliq's search is loose: keep real matches
-                users = mine.concat(fresh);
+                users = mine.concat(more);
                 q = ""; // already filtered
             } catch (err) { warning = err.message; }
         }
@@ -289,7 +286,11 @@ function createWorkflowRouter({ requireSession }) {
 
         const total = users.length;
         const hits = (q ? users.filter((u) => (u.name + " " + u.email + " " + (u.department || "")).toLowerCase().includes(q)) : users).slice(0, 200);
-        res.json({ success: true, source, total, warning, users: hits });
+        return { success: true, source, total, warning, users: hits };
+    }
+
+    router.get("/org-users", requireRole(["admin"]), wrap(async (req, res) => {
+        res.json(await searchOrgUsers(req, req.query.q, req.query.refresh === "1"));
     }));
 
     router.get("/members", requireRole(["admin"]), wrap(async (req, res) => {

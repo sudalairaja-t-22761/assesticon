@@ -4,7 +4,7 @@
  * One picker, used in two places:
  *   - the Save dialog (#fnameShareGroup), read with SF.spriteShare.read()
  *   - the Share button on a saved folder, which opens SF.spriteShare.open(folder)
- * The people list comes from GET api/share-users (everyone who has signed in, plus members added by email).
+ * People are found with GET api/share-users?q= — the same Zoho org search (People + Cliq) as the Members dialog.
  * A value is { shared: true } (all users), { shared: false, sharedWith: [emails] } (specific users) or
  * { shared: false, sharedWith: [] } (private) — the same body /api/save-sprite and /api/saved-sprite/:id/share take.
  */
@@ -12,25 +12,32 @@
   'use strict';
 
   var API = window.SF_CATALYST_API_BASE || '/server/spriteForgeJoin/';
-  var MAX_LIST = 60;
-  var users = null, loading = null, seq = 0;
+  var known = {};          // email → { name, avatar, about } from search results, so picked people keep their name and photo
+  var seq = 0, timer = null, ask = 0;
 
   function url(p) { return String(API).replace(/\/+$/, '') + '/' + p; }
   function headers() { return typeof SF.masterLibraryAuthHeaders === 'function' ? SF.masterLibraryAuthHeaders() : {}; }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   var isEmail = function (s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s); };
 
-  function loadUsers() {
-    if (users) return $.Deferred().resolve(users).promise();
-    if (loading) return loading;
-    loading = $.ajax({ url: url('api/share-users'), type: 'GET', headers: headers(), dataType: 'json' })
-      .then(function (res) { users = (res && res.users) || []; return users; },
-        function () { loading = null; return $.Deferred().resolve([]).promise(); });
-    return loading;
+  function nameOf(email) { return known[email] ? known[email].name : email; }
+  function initials(name) {
+    var p = String(name || '?').trim().split(/[\s.@_-]+/).filter(Boolean);
+    return ((p[0] || '?')[0] + (p.length > 1 ? p[1][0] : '')).toUpperCase();
   }
-  function nameOf(email) {
-    var u = (users || []).filter(function (x) { return x.email === email; })[0];
-    return u ? u.name : email;
+  // Same avatar as the Members page: the photo (People photos load through the server), initials underneath.
+  function avatarHtml(email) {
+    var u = known[email] || {}, src = String(u.avatar || '');
+    if (src.indexOf('proxy:') === 0) {
+      src = url('api/org-users/photo?u=' + encodeURIComponent(src.slice(6)) + '&session_id=' + encodeURIComponent(headers()['x-session-id'] || ''));
+    } else if (!/^https?:\/\//i.test(src)) src = '';
+    return '<span class="vf-avatar">' + esc(initials(u.name || email)) +
+      (src ? '<img src="' + esc(src) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : '') + '</span>';
+  }
+  function personHtml(email, extra) {
+    var u = known[email] || {};
+    return avatarHtml(email) + '<div class="ssh-person"><b>' + esc(u.name || email) + '</b><span>' + esc(email) +
+      (u.about ? ' · ' + esc(u.about) : '') + '</span></div>' + (extra || '');
   }
 
   // Value → mode
@@ -54,45 +61,59 @@
         opt('users', 'Specific users', 'Only the people you pick') +
       '</div>' +
       '<div class="ssh-users hidden">' +
-        '<div class="ssh-chips"></div>' +
-        '<input type="text" class="form-input ssh-search" placeholder="Search people by name or email" autocomplete="off" spellcheck="false">' +
-        '<div class="ssh-list" role="listbox"></div>' +
+        '<div class="ssh-search-wrap">' +
+          '<input type="search" class="ssh-search" placeholder="Enter name or email address" autocomplete="off" spellcheck="false">' +
+          '<div class="ssh-results hidden" role="listbox"></div>' +
+        '</div>' +
+        '<div class="ssh-picked-head">People with access <span class="ssh-count"></span></div>' +
+        '<div class="ssh-picked"></div>' +
       '</div>' +
     '</div>';
   }
 
-  function renderChips($root) {
+  function renderPicked($root) {
     var sel = $root.data('sshSel') || [];
-    $root.find('.ssh-chips').html(sel.length ? sel.map(function (e) {
-      return '<span class="ssh-chip" title="' + esc(e) + '">' + esc(nameOf(e)) +
-        '<button type="button" class="ssh-chip-x" data-ssh-remove="' + esc(e) + '" aria-label="Remove ' + esc(nameOf(e)) + '">&times;</button></span>';
-    }).join('') : '<span class="ssh-empty">No one picked yet</span>');
+    $root.find('.ssh-count').text(sel.length ? '(' + sel.length + ')' : '');
+    $root.find('.ssh-picked').html(sel.length ? sel.map(function (e) {
+      return '<div class="ssh-picked-row">' + personHtml(e,
+        '<button type="button" class="ssh-remove" data-ssh-remove="' + esc(e) + '" title="Remove ' + esc(nameOf(e)) + '" aria-label="Remove ' + esc(nameOf(e)) + '">&times;</button>') + '</div>';
+    }).join('') : '<div class="ssh-note">No one picked yet — search above and click a person to add them.</div>');
   }
 
-  function renderList($root) {
-    var sel = $root.data('sshSel') || [];
-    var q = String($root.find('.ssh-search').val() || '').trim().toLowerCase();
-    var $list = $root.find('.ssh-list');
-    if (!users) { $list.html('<div class="ssh-note">Loading people…</div>'); return; }
-    var hits = users.filter(function (u) { return !q || u.name.toLowerCase().indexOf(q) >= 0 || u.email.indexOf(q) >= 0; });
-    var rows = hits.slice(0, MAX_LIST).map(function (u) {
-      var on = sel.indexOf(u.email) >= 0;
-      return '<label class="ssh-row' + (on ? ' is-on' : '') + '"><input type="checkbox" data-ssh-user="' + esc(u.email) + '"' + (on ? ' checked' : '') + '>' +
-        '<span class="ssh-row-name">' + esc(u.name) + '</span><span class="ssh-row-mail">' + esc(u.email) + '</span></label>';
+  // Zoho org search (People + Cliq, the same one the Members dialog uses); runs once 2+ letters are typed.
+  function search($root) {
+    var q = String($root.find('.ssh-search').val() || '').trim();
+    var $box = $root.find('.ssh-results');
+    if (q.length < 2) { $box.removeClass('hidden').html('<div class="ssh-note">Type at least 2 letters of a name or email to search Zoho employees</div>'); return; }
+    var mine = ++ask, sel = $root.data('sshSel') || [];
+    $box.removeClass('hidden').html('<div class="ssh-note">Searching Zoho users…</div>');
+    $.ajax({ url: url('api/share-users?q=' + encodeURIComponent(q)), type: 'GET', headers: headers(), dataType: 'json' }).then(function (r) {
+      if (mine !== ask) return; // a newer search is on its way
+      var list = (r && r.users) || [];
+      list.forEach(function (u) { known[u.email] = { name: u.name, avatar: u.avatar, about: [u.designation, u.department].filter(Boolean).join(', ') }; });
+      var rows = list.map(function (u) {
+        var on = sel.indexOf(u.email) >= 0;
+        return '<div class="ssh-result' + (on ? ' is-on' : '') + '" data-ssh-add="' + esc(u.email) + '">' + personHtml(u.email, on ? '<em>Added</em>' : '') + '</div>';
+      });
+      var low = q.toLowerCase();
+      if (isEmail(low) && !list.some(function (u) { return u.email === low; })) {
+        rows.push('<div class="ssh-result" data-ssh-add="' + esc(low) + '">' + avatarHtml(low) +
+          '<div class="ssh-person"><b>Add “' + esc(low) + '”</b><span>Use this email even if it is not in the list</span></div></div>');
+      }
+      $box.html((r && r.warning ? '<div class="ssh-note">' + esc(r.warning) + '</div>' : '') +
+        (rows.length ? rows.join('') : '<div class="ssh-note ssh-notfound">User not found for “' + esc(q) + '”</div>'));
+    }, function (xhr) {
+      if (mine !== ask) return;
+      var msg = (xhr && xhr.responseJSON && xhr.responseJSON.message) || (xhr && xhr.status === 401 ? 'Session expired. Sign in again.' : 'Could not search users');
+      $box.html('<div class="ssh-note ssh-notfound">' + esc(msg) + '</div>');
     });
-    // Someone who has never signed in can still be added by their full email.
-    if (q && isEmail(q) && !users.some(function (u) { return u.email === q; }) && sel.indexOf(q) < 0) {
-      rows.unshift('<button type="button" class="ssh-row ssh-add" data-ssh-add="' + esc(q) + '">+ Add <b>' + esc(q) + '</b></button>');
-    }
-    if (hits.length > MAX_LIST) rows.push('<div class="ssh-note">' + (hits.length - MAX_LIST) + ' more — type to narrow the list</div>');
-    $list.html(rows.length ? rows.join('') : '<div class="ssh-note">' + (q ? 'No one matches “' + esc(q) + '”. Type a full email to add someone.' : 'No other users yet.') + '</div>');
   }
 
   function setMode($root, mode) {
     $root.find('input[type=radio][value="' + mode + '"]').prop('checked', true);
     $root.find('.ssh-mode').each(function () { $(this).toggleClass('is-on', $(this).find('input').is(':checked')); });
     $root.find('.ssh-users').toggleClass('hidden', mode !== 'users');
-    if (mode === 'users') loadUsers().then(function () { renderChips($root); renderList($root); });
+    if (mode === 'users') renderPicked($root);
   }
 
   /** Put a picker into $root (replacing what is there) and set its value. */
@@ -100,7 +121,6 @@
     $root.html(html());
     var sel = (value && value.sharedWith ? value.sharedWith : []).map(function (e) { return String(e).toLowerCase(); });
     $root.data('sshSel', sel);
-    renderChips($root);
     setMode($root, modeOf(value));
   }
 
@@ -119,35 +139,33 @@
     return 'private';
   }
 
-  $(document).on('change', '.ssh input[type=radio]', function () { setMode($(this).closest('.ssh').parent(), this.value); });
-  $(document).on('input', '.ssh-search', function () { renderList($(this).closest('.ssh').parent()); });
+  var rootOf = function (el) { return $(el).closest('.ssh').parent(); };
+  $(document).on('change', '.ssh input[type=radio]', function () { setMode(rootOf(this), this.value); });
+  $(document).on('input focus', '.ssh-search', function () {
+    var $root = rootOf(this);
+    clearTimeout(timer); timer = setTimeout(function () { search($root); }, 400);
+  });
   $(document).on('keydown', '.ssh-search', function (e) {
+    if (e.key === 'Escape') { $(this).siblings('.ssh-results').addClass('hidden'); e.stopImmediatePropagation(); return; }
     if (e.key !== 'Enter') return;
     e.preventDefault(); // never submits the surrounding dialog
-    var $add = $(this).closest('.ssh').find('[data-ssh-add]').first();
-    if ($add.length) $add.trigger('click');
-  });
-  $(document).on('change', '.ssh [data-ssh-user]', function () {
-    var $root = $(this).closest('.ssh').parent(), sel = ($root.data('sshSel') || []).slice(), email = String($(this).data('sshUser'));
-    var at = sel.indexOf(email);
-    if (this.checked && at < 0) sel.push(email);
-    if (!this.checked && at >= 0) sel.splice(at, 1);
-    $root.data('sshSel', sel);
-    $(this).closest('.ssh-row').toggleClass('is-on', this.checked);
-    renderChips($root);
+    var $first = $(this).siblings('.ssh-results').find('[data-ssh-add]').not('.is-on').first();
+    if ($first.length) $first.trigger('click');
   });
   $(document).on('click', '.ssh [data-ssh-add]', function () {
-    var $root = $(this).closest('.ssh').parent(), sel = ($root.data('sshSel') || []).slice(), email = String($(this).data('sshAdd'));
+    var $root = rootOf(this), sel = ($root.data('sshSel') || []).slice(), email = String($(this).data('sshAdd'));
     if (sel.indexOf(email) < 0) sel.push(email);
     $root.data('sshSel', sel);
     $root.find('.ssh-search').val('');
-    renderChips($root); renderList($root);
+    $root.find('.ssh-results').addClass('hidden').empty();
+    renderPicked($root);
   });
   $(document).on('click', '.ssh [data-ssh-remove]', function () {
-    var $root = $(this).closest('.ssh').parent(), email = String($(this).data('sshRemove'));
+    var $root = rootOf(this), email = String($(this).data('sshRemove'));
     $root.data('sshSel', ($root.data('sshSel') || []).filter(function (e) { return e !== email; }));
-    renderChips($root); renderList($root);
+    renderPicked($root);
   });
+  $(document).on('click', function (e) { if (!$(e.target).closest('.ssh-search-wrap').length) $('.ssh-results').addClass('hidden'); });
 
   // ── Share dialog for a saved folder ─────────────────────────────────────────
   function ensureModal() {
@@ -201,5 +219,5 @@
     });
   });
 
-  SF.spriteShare = { html: html, mount: mount, read: read, describe: describe, open: open, loadUsers: loadUsers, nameOf: nameOf };
+  SF.spriteShare = { html: html, mount: mount, read: read, describe: describe, open: open, nameOf: nameOf };
 })(window.SpriteForge, jQuery);
