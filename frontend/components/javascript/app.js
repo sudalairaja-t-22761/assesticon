@@ -2193,6 +2193,9 @@
       var iconId = $(this).data('iconId');
       var openPath = $(this).data('openPath');
 
+      // Preview popup (library-icon-view-modal.js): large preview, similar icons, Asset Store illustrations.
+      if (iconId && typeof SF.openLibraryIconModal === 'function' && SF.openLibraryIconModal(iconId)) return;
+
       if (openPath) {
         _openResolvedSpriteUrl(openPath, '');
         return;

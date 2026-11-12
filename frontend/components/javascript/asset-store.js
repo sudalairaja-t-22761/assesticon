@@ -117,6 +117,43 @@
     watchThumbs();
   }
 
+  function setFiles(d) {
+    meta = d;
+    files = d.files || [];
+    var exts = [];
+    files.forEach(function (f) { if (exts.indexOf(f.ext) === -1) exts.push(f.ext); });
+    exts.sort();
+    var cur = $('#assetStoreFormat').val();
+    $('#assetStoreFormat').html('<option value="">All formats</option>' + exts.map(function (e) {
+      return '<option value="' + esc(e) + '">' + esc(e.toUpperCase()) + '</option>';
+    }).join('')).val(exts.indexOf(cur) !== -1 ? cur : '');
+  }
+
+  // The listing for other pages (Library icon popup → illustration suggestions). Resolves [] when it cannot load.
+  var listing = null;
+  function getFiles() {
+    if (files.length) return Promise.resolve(files);
+    if (typeof SF.isMasterLibrarySignedOut === 'function' && SF.isMasterLibrarySignedOut()) return Promise.resolve([]);
+    if (!listing) {
+      listing = new Promise(function (resolve) {
+        $.ajax({ url: url('assets'), dataType: 'json', headers: headers(), timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000 })
+          .done(function (d) { if (!files.length) setFiles(d); resolve(files); })
+          .fail(function () { listing = null; resolve([]); });
+      });
+    }
+    return listing;
+  }
+
+  /** Open the preview dialog for one image (by repo path) from any page. */
+  function openByPath(path) {
+    $('#assetStoreSearch').val('');
+    $('#assetStoreFormat').val('');
+    applyFilter();
+    for (var i = 0; i < shown.length; i++) if (shown[i].path === path) { openPreview(i); return; }
+  }
+
+  SF.assetStore = { getFiles: getFiles, fetchImage: fetchImage, open: openByPath };
+
   function load(refresh) {
     var $sum = $('#assetStoreSummary'), $grid = $('#assetStoreGrid');
     if (typeof SF.isMasterLibrarySignedOut === 'function' && SF.isMasterLibrarySignedOut()) {
@@ -127,16 +164,8 @@
     $sum.text('Loading from repository…');
     $.ajax({ url: url('assets' + (refresh ? '?refresh=1' : '')), dataType: 'json', headers: headers(), timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000 })
       .done(function (d) {
-        meta = d;
-        files = d.files || [];
         Object.keys(blobs).forEach(function (k) { URL.revokeObjectURL(blobs[k].url); delete blobs[k]; });
-        var exts = [];
-        files.forEach(function (f) { if (exts.indexOf(f.ext) === -1) exts.push(f.ext); });
-        exts.sort();
-        var cur = $('#assetStoreFormat').val();
-        $('#assetStoreFormat').html('<option value="">All formats</option>' + exts.map(function (e) {
-          return '<option value="' + esc(e) + '">' + esc(e.toUpperCase()) + '</option>';
-        }).join('')).val(exts.indexOf(cur) !== -1 ? cur : '');
+        setFiles(d);
         applyFilter();
       })
       .fail(function (xhr) {

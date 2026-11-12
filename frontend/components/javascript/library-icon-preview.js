@@ -38,7 +38,10 @@
   var STROKES = [{ w: 1, cls: 'iconStroke1' }, { w: 1.5, cls: '' }, { w: 2, cls: 'iconStroke2' }];
 
   var current = null;        // icon shown in the panel
-  var colorKey = 'black';
+  // Default colour follows the theme: black on light, white on dark — until the user picks another colour.
+  function isDark() { return document.documentElement.getAttribute('data-theme') === 'dark'; }
+  function themeColorKey() { return isDark() ? 'white' : 'black'; }
+  var colorKey = themeColorKey();
   var sizeKey = '';          // '' = the icon's own size
   var strokeW = 1.5;
 
@@ -275,6 +278,17 @@
   };
 
   $(document).on('click', '#lppSwatches .lpp-swatch', function () { colorKey = $(this).data('color'); render(); });
+  // Theme switched: black ↔ white follow it (a colour the user chose, e.g. red, stays).
+  if (window.MutationObserver) {
+    new MutationObserver(function () {
+      if (colorKey !== 'black' && colorKey !== 'white') return;
+      var k = themeColorKey();
+      if (k === colorKey) return;
+      colorKey = k;
+      render();
+      if (typeof SF.onLibraryThemeColor === 'function') SF.onLibraryThemeColor();
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
   $(document).on('click', '#lppSizes [data-size]', function () { var k = $(this).data('size'); sizeKey = sizeKey === k ? '' : k; render(); });
   $(document).on('click', '#lppStrokes [data-stroke]', function () { strokeW = +$(this).data('stroke'); render(); });
   $(document).on('click', '#lppCssCopy', function () {
@@ -294,7 +308,7 @@
   SF.libPreview = {
     COLORS: COLORS, colorOf: colorOf, coloredSvg: coloredSvg, measure: measure, withViewBox: withViewBox, isWhite: isWhite,
     baseName: baseName, dataUri: dataUri, code: code, usesStroke: usesStroke, isolatedHost: isolatedHost,
-    current: function () { return current; }, colorKey: function () { return colorKey; }, render: function () { render(); }
+    current: function () { return current; }, colorKey: function () { return colorKey; }, themeColorKey: themeColorKey, render: function () { render(); }
   };
 
   // Re-highlight after the grid re-renders; leave the Library → close the panel.

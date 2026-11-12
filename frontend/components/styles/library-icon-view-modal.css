@@ -1,0 +1,88 @@
+/* ============================================================
+   ICON LIBRARY — eye button preview popup (library-icon-view-modal.js)
+   ============================================================ */
+.modal.lvm-modal { width: 780px; max-height: 88vh; }
+.lvm-modal .modal-header h3 { min-width: 0; }
+#lvmTitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lvm-sub { font-size: 12px; font-weight: 400; color: var(--text-tertiary); white-space: nowrap; }
+
+.lvm-body { display: flex; flex-direction: column; gap: 18px; }
+.lvm-top { display: flex; gap: 18px; align-items: stretch; }
+.lvm-stage {
+  flex: 0 0 220px; height: 220px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-light); border-radius: var(--radius);
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #eef0f3 25%, transparent 25%, transparent 75%, #eef0f3 75%),
+    linear-gradient(45deg, #eef0f3 25%, transparent 25%, transparent 75%, #eef0f3 75%);
+  background-size: 16px 16px; background-position: 0 0, 8px 8px;
+}
+.lvm-stage img { width: 128px; height: 128px; object-fit: contain; }
+.lvm-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.lvm-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-tertiary); }
+.lvm-code {
+  position: relative; padding: 10px 40px 10px 12px;
+  border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-hover);
+}
+.lvm-code code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--text-primary); word-break: break-all; white-space: pre-wrap; }
+.lvm-copy {
+  position: absolute; top: 6px; right: 6px; width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-tertiary); border-radius: var(--radius-xs); cursor: pointer;
+}
+.lvm-copy:hover { background: var(--bg-active); color: var(--accent); }
+.lvm-meta { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12px; color: var(--text-secondary); }
+.lvm-meta b { color: var(--text-primary); font-weight: 600; }
+.lvm-actions { display: flex; gap: 8px; margin-top: auto; }
+
+.lvm-section-head { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+.lvm-hint { font-size: 11px; font-weight: 400; color: var(--text-tertiary); margin-left: 6px; }
+.lvm-status { font-size: 12px; color: var(--text-tertiary); }
+.lvm-status:not(:empty) { margin-bottom: 8px; }
+
+.lvm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 8px; }
+.lvm-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0;
+  padding: 10px 6px 8px; cursor: pointer; font: inherit;
+  border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-panel);
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+.lvm-tile:hover, .lvm-tile:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); outline: none; }
+.lvm-thumb { width: 100%; height: 40px; display: flex; align-items: center; justify-content: center; }
+.lvm-thumb img { max-width: 32px; max-height: 32px; width: 32px; height: 32px; object-fit: contain; }
+.lvm-name { max-width: 100%; font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lvm-tags { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; min-height: 16px; }
+.lvm-tag { padding: 1px 6px; border-radius: 8px; font-size: 10px; line-height: 14px; background: var(--bg-hover); color: var(--text-secondary); border: 1px solid var(--border-light); }
+.lvm-tag-look { background: var(--accent-subtle); color: var(--accent-text); border-color: transparent; }
+.lvm-tag-same { background: #E6F6EE; color: #0E8A53; border-color: transparent; }
+[data-theme="dark"] .lvm-tag-same { background: rgba(18,170,103,.16); color: #4FD39A; }
+
+.lvm-art-grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
+.lvm-art .lvm-thumb { height: 84px; }
+.lvm-art .lvm-thumb img { width: auto; height: auto; max-width: 100%; max-height: 84px; }
+.lvm-loading { font-size: 11px; color: var(--text-tertiary); }
+
+/* Dark theme: icons are shown white on a dark backdrop (the large preview is repainted in JS; the small tiles and
+   the Library grid use the filter below — dark ink becomes white, colours keep their hue). */
+[data-theme="dark"] .lvm-stage {
+  background-color: #1A2130;
+  background-image:
+    linear-gradient(45deg, #222B3C 25%, transparent 25%, transparent 75%, #222B3C 75%),
+    linear-gradient(45deg, #222B3C 25%, transparent 25%, transparent 75%, #222B3C 75%);
+}
+[data-theme="dark"] #lvmSimilar .lvm-thumb img,
+[data-theme="dark"] #libGrid .lib-card-preview img { filter: invert(1) hue-rotate(180deg) brightness(1.35); }
+
+@media (max-width: 640px) {
+  .lvm-top { flex-direction: column; }
+  .lvm-stage { flex-basis: auto; height: 180px; }
+}
+
+/* Looking at a suggestion: its tile is marked, and the header offers the way back to the icon first opened. */
+.lvm-tile.is-active { border-color: var(--accent); background: var(--accent-subtle); }
+.lvm-back {
+  margin-left: 6px; padding: 2px 8px; font: inherit; font-size: 12px; font-weight: 400; white-space: nowrap; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-panel); color: var(--accent-text);
+}
+.lvm-back:hover { border-color: var(--accent); }
