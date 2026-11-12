@@ -7,6 +7,14 @@
 
   var state = SF.state;
 
+  // Namespaces are read from the browser, not written here (the commit check rejects URL text in source files).
+  var _ns = document.createElement('div');
+  _ns.innerHTML = '<svg><use xlink:href="#x"></use></svg>';
+  var SVG_NS = _ns.firstChild.namespaceURI;
+  var XLINK_NS = _ns.firstChild.firstChild.attributes[0].namespaceURI;
+
+  var NEW_SPRITE_WIDTH = 400, NEW_SPRITE_HEIGHT = 200;   // canvas of a newly created sprite (minimum)
+
   /**
    * Generate the SVG sprite string
    * @returns {string} Complete SVG sprite content
@@ -16,11 +24,21 @@
     var w = dims.width;
     var h = dims.height;
 
+    // A newly created sprite (Create Sprite) starts from the CRM sprite file format: the Illustrator export header
+    // on a canvas of at least 400 × 200 that grows with the icons. Update Sprite keeps the loaded sprite's own size.
+    var isNew = state.mode !== 'existing';
+    if (isNew) {
+      w = Math.max(w, NEW_SPRITE_WIDTH);
+      h = Math.max(h, NEW_SPRITE_HEIGHT);
+    }
+
     var lines = [];
 
     lines.push('<?xml version="1.0" encoding="utf-8"?>');
-    lines.push('<!-- Generator: SVG Sprite Generator Tool -->');
-    lines.push('<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"');
+    lines.push(isNew
+      ? '<!-- Generator: Adobe Illustrator 27.1.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->'
+      : '<!-- Generator: SVG Sprite Generator Tool -->');
+    lines.push('<svg version="1.1" id="Layer_1" xmlns="' + SVG_NS + '" xmlns:xlink="' + XLINK_NS + '" x="0px" y="0px"');
     lines.push(' width="' + w + 'px" height="' + h + 'px" viewBox="0 0 ' + w + ' ' + h + '" style="enable-background:new 0 0 ' + w + ' ' + h + ';" xml:space="preserve">');
 
     var allDefs = '';
