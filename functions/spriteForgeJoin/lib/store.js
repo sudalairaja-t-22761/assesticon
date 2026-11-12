@@ -67,6 +67,22 @@ function localWrite(db) { fs.writeFileSync(LOCAL_FILE, JSON.stringify(db, null, 
 // Catalyst returns a row either flat or nested under the table name.
 const flatten = (row, table) => (row && row[table] ? row[table] : row);
 
+// Every row of a Data Store table. getAllRows() makes ONE request and so returns only the first page (about 200
+// rows): once workflow_store grew past that, newer records (a new request, events, log entries) were never read
+// back. Page through with next_token until the table is done.
+const PAGE_ROWS = 300;
+async function readAllRows(table) {
+    const out = [];
+    let nextToken;
+    for (let page = 0; page < 1000; page++) {
+        const resp = (await table.getPagedRows({ nextToken, maxRows: PAGE_ROWS })) || {};
+        out.push(...(resp.data || []));
+        if (!resp.more_records || !resp.next_token) break;
+        nextToken = resp.next_token;
+    }
+    return out;
+}
+
 function encode(record) {
     const { ROWID, CREATEDTIME, MODIFIEDTIME, ...fields } = record;
     const json = JSON.stringify(fields);
@@ -154,7 +170,7 @@ function forRequest(req) {
     const api = {
         async all(table) {
             if (MAPPED[table]) {
-                try { return ((await ds.table(table).getAllRows()) || []).map((r) => fromRow(MAPPED[table], flatten(r, table))); }
+                try { return ((await readAllRows(ds.table(table))) || []).map((r) => fromRow(MAPPED[table], flatten(r, table))); }
                 catch (e) { console.error(`[store] table "${table}" unavailable, using workflow_store:`, e.message); }
             }
             return ldb.all(table);
@@ -163,7 +179,7 @@ function forRequest(req) {
         async migrate(table) {
             const spec = MAPPED[table];
             let rows;
-            try { rows = (await ds.table(table).getAllRows()) || []; }
+            try { rows = (await readAllRows(ds.table(table))) || []; }
             catch (e) { return { ok: false, error: `Data Store table "${table}" is missing or has the wrong columns. Create it with Var Char columns ${Object.values(spec.required).join(", ")} (and optional ${Object.values(spec.optional).join(", ")}). Details: ${e.message}` }; }
             if (rows.length) return { ok: true, moved: 0 };
             const legacy = await ldb.legacy(table);
@@ -206,8 +222,8 @@ function forRequest(req) {
     };
     Object.assign(ldb, {
         async all(table) {
-            if (REAL_TABLES.has(table)) return ((await ds.table(table).getAllRows()) || []).map((r) => flatten(r, table));
-            const rows = (await guard(() => store().getAllRows()) || []).map((r) => flatten(r, STORE_TABLE));
+            if (REAL_TABLES.has(table)) return ((await readAllRows(ds.table(table))) || []).map((r) => flatten(r, table));
+            const rows = (await guard(() => readAllRows(store())) || []).map((r) => flatten(r, STORE_TABLE));
             return rows.filter((r) => r.coll === table).map(decode);
         },
         async insert(table, row) {
@@ -228,7 +244,7 @@ function forRequest(req) {
         // Rows an older version kept as JSON in the generic `workflow_store` table (coll = table).
         async legacy(table) {
             try {
-                const rows = (await store().getAllRows() || []).map((r) => flatten(r, STORE_TABLE));
+                const rows = (await readAllRows(store()) || []).map((r) => flatten(r, STORE_TABLE));
                 return rows.filter((r) => r.coll === table).map(decode);
             } catch (_) { return []; }
         },
@@ -248,7 +264,7 @@ function forRequest(req) {
         // Fill the readable columns of rows saved before they existed. Cheap no-op once everything is in sync.
         async syncMirrors(table) {
             if (!MIRRORS[table]) return 0;
-            const rows = ((await guard(() => store().getAllRows())) || []).map((r) => flatten(r, STORE_TABLE)).filter((r) => r.coll === table);
+            const rows = ((await guard(() => readAllRows(store()))) || []).map((r) => flatten(r, STORE_TABLE)).filter((r) => r.coll === table);
             let n = 0;
             for (const row of rows) {
                 const want = mirrorOf(table, decode(row));

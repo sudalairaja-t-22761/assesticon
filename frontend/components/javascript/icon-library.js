@@ -32,6 +32,7 @@
     repoIcons: [],    // exploded from the repository sprites (repo-library-icons.js)
     sourceFilter: 'all', // 'all' | 'mine' | '<sprite base name>'
     search: '',
+    sort: (function () { try { return localStorage.getItem('sf_lib_sort') || 'newest'; } catch (e) { return 'newest'; } })(),
     selected: {},
     authBlocked: false
   };
@@ -87,12 +88,30 @@
     return SF.iconCategories.has(icon, id);
   }
 
+  // Sort: 'newest' = the icon added last to the sprite on top (sprite order reversed), 'oldest' = sprite order,
+  // 'name' = A–Z. The list itself stays in sprite order; only what is shown is sorted.
+  function sortIcons(list) {
+    var mode = SF.libState.sort || 'newest';
+    if (mode === 'oldest') return list;
+    if (mode === 'name') {
+      return list.slice().sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true, sensitivity: 'base' }); });
+    }
+    return list.slice().reverse();
+  }
+
   function visibleLibraryIcons() {
     var search = (SF.libState.search || '').toLowerCase();
-    return (SF.libState.icons || []).filter(function (icon) {
+    return sortIcons((SF.libState.icons || []).filter(function (icon) {
       return icon && matchesSource(icon) && matchesSearch(icon, search) && matchesStatus(icon) && matchesOptions(icon);
-    });
+    }));
   }
+
+  $(document).on('change', '#libSort', function () {
+    SF.libState.sort = this.value;
+    try { localStorage.setItem('sf_lib_sort', this.value); } catch (e) {}
+    SF.renderLibraryGrid();
+    $('#libGrid').scrollTop(0);
+  });
 
   function selectedIds() {
     return Object.keys(SF.libState.selected || {}).filter(function (id) {
@@ -909,6 +928,7 @@
     var visible = visibleLibraryIcons();
 
     $('#libIconCount').text(visible.length);
+    $('#libSort').val(SF.libState.sort || 'newest');
     updateLibrarySelectionUi(visible);
 
     if (!visible.length) {

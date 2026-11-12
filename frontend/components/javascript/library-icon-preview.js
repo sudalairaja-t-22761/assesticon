@@ -237,6 +237,20 @@
     $('#libGrid .lib-card').removeClass('lib-previewing').filter(function () { return $(this).data('iconId') === current.id; }).addClass('lib-previewing');
   }
 
+  // The panel is a card beside the Library: from the top of the icon list (#libBrowseSection) to the bottom of the
+  // repository/version footer (#libGridFooter), so it has the whole page height and needs no scroll.
+  // Re-measured after the page makes room for it, on every resize and on scroll.
+  function placePanel() {
+    var $p = $('#libPreviewPanel'), shell = document.getElementById('libBrowseSection'), foot = document.getElementById('libGridFooter');
+    if (!$p.length || $p.hasClass('hidden') || !shell) return;
+    var r = shell.getBoundingClientRect(), end = foot && foot.getBoundingClientRect().height ? foot.getBoundingClientRect().bottom : r.bottom;
+    if (!r.height) return;
+    var top = Math.max(0, Math.round(r.top));
+    $p.css({ top: top + 'px', height: Math.max(0, Math.round(Math.min(end, window.innerHeight - 8) - top)) + 'px', bottom: 'auto' });
+  }
+  $(window).on('resize', placePanel);
+  document.addEventListener('scroll', placePanel, true); // a short window scrolls the page: keep the card beside the list
+
   SF.openLibraryPreview = function (iconId) {
     var icon = ((SF.libState && SF.libState.icons) || []).filter(function (i) { return i && i.id === iconId; })[0];
     if (!icon) return;
@@ -246,7 +260,9 @@
     loadOptions(true);
     render();
     $('#libPreviewPanel').removeClass('hidden');
-    $('.main').addClass('has-right-panel has-right-panel-wide');
+    $('.main').addClass('has-right-panel has-right-panel-wide has-right-panel-lib');
+    placePanel();
+    requestAnimationFrame(placePanel); // once the page has reflowed for the panel
   };
 
   SF.closeLibraryPreview = function () {
@@ -254,6 +270,7 @@
     current = null;
     $('#libPreviewPanel').addClass('hidden');
     $('#libGrid .lib-card').removeClass('lib-previewing');
+    $('.main').removeClass('has-right-panel-lib');
     if ($('#docRightPanel').hasClass('hidden')) $('.main').removeClass('has-right-panel has-right-panel-wide');
   };
 

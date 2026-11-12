@@ -292,8 +292,11 @@
       counts.all++; var s = SF.wfStatusOf(ic); counts[s] = (counts[s] || 0) + 1;
     });
     var chips = [['all', 'All status']].concat(Object.keys(STATUS_LABEL).map(function (k) { return [k, STATUS_LABEL[k]]; }));
+    // Each status chip carries the marker the tiles show, so the chips double as the legend.
     $bar.html(chips.map(function (c) {
-      return '<button type="button" class="lib-source-chip' + (c[0] === cur ? ' active' : '') + '" data-vf-filter="' + c[0] + '">' +
+      return '<button type="button" class="lib-source-chip' + (c[0] === cur ? ' active' : '') + '" data-vf-filter="' + c[0] + '"' +
+        (MARK_TIP[c[0]] ? ' title="' + esc(MARK_TIP[c[0]]) + '"' : '') + '>' +
+        (MARK_SVG[c[0]] ? '<span class="vf-mark vf-mark-inline vf-mark-' + c[0] + '" aria-hidden="true">' + MARK_SVG[c[0]] + '</span>' : '') +
         esc(c[1]) + ' <span class="lib-source-count">' + (counts[c[0]] || 0) + '</span></button>';
     }).join('') +
       // Separate filter: one chip per icon category (library-icon-categories.js); combines with the status chips.
@@ -347,7 +350,6 @@
       $('<button class="btn btn-primary btn-sm" id="libReqSelectedBtn" type="button" disabled>' + REQ_ICON + ' <span>Request verification</span></button>')
         .insertAfter($('#libGenerateWebfontBtn').length ? '#libGenerateWebfontBtn' : '#libAddSelectedBtn');
     }
-    renderStatusLegend();
     var sel = selectedRepoIconsForRequest(), req = requestableSelection();
     var mocks = req.filter(function (x) { return x.stage === 'mock'; }).length, masters = req.length - mocks;
     $('#libReqSelectedBtn').prop('disabled', !req.length)
@@ -355,16 +357,6 @@
         : !req.length ? 'The ticked icons are already requested or on the master branch'
         : (mocks ? mocks + ' mock verification' : '') + (mocks && masters ? ' · ' : '') + (masters ? masters + ' push to master' : ''))
       .find('span').text('Request verification' + (req.length ? ' (' + req.length + ')' : ''));
-  }
-  // Legend for the tile markers, at the right end of the selection/category row: glyph + status name.
-  function renderStatusLegend() {
-    var $bar = $('#libBulkActions');
-    if (!$bar.length || $('#libStatusLegend').length) return;
-    $bar.append('<span class="vf-legend" id="libStatusLegend" aria-label="Status markers">' +
-      Object.keys(STATUS_LABEL).map(function (k) {
-        return '<span class="vf-legend-item" title="' + esc(MARK_TIP[k] || STATUS_LABEL[k]) + '">' +
-          '<span class="vf-mark vf-mark-inline vf-mark-' + k + '">' + MARK_SVG[k] + '</span>' + esc(STATUS_LABEL[k]) + '</span>';
-      }).join('') + '</span>');
   }
   SF.wfUpdateBulkRequest = updateBulkRequest;
   // Ticking icons does not re-render the grid: refresh the button after each change.
@@ -420,12 +412,20 @@
   $(document).on('click', '#libReqDialog', function (e) { if (e.target === this) closeRequestDialog(); });
   $(document).on('keydown', function (e) { if (e.key === 'Escape' && $('#libReqDialog').length && !$('#libReqDialog').hasClass('hidden')) closeRequestDialog(); });
 
+  // A new request starts in the Visual audit step: open that tab (not whichever tab was viewed last), and for a
+  // single request open it too, so the new entry is in view.
+  function showNewRequests(id) {
+    wf.reqTab = 'visual';
+    if (id) wf.openId = id;
+    SF.switchPage('wfrequests');
+  }
+
   // One request per icon, sent one after the other (the server records and mails each on its own).
   $(document).on('click', '#lreqSubmit', function () {
     var req = requestableSelection();
     if (!req.length) { closeRequestDialog(); return; }
     var $btn = $(this).prop('disabled', true), target = $('#lreqTarget').val(), note = $('#lreqNote').val();
-    var done = 0, failed = [], total = req.length;
+    var done = 0, failed = [], total = req.length, lastId = null;
     req.reduce(function (chain, x) {
       return chain.then(function () {
         var ic = x.ic, onMock = mockSpriteOf(ic);
@@ -434,7 +434,7 @@
           symbolId: ic.symbolId, sprite: ic.sprite, iconName: ic.name, svg: ic.svgContent, stage: x.stage,
           inMock: onBranch(ic, 'mock'), inMaster: onBranch(ic, 'master'),
           targetSprite: x.stage === 'master' && onMock ? onMock : target, note: note
-        }).then(function () { done++; }, function (e) { failed.push(ic.name + ': ' + (e && e.message || 'failed')); });
+        }).then(function (res) { done++; lastId = res && res.request && res.request.ROWID; }, function (e) { failed.push(ic.name + ': ' + (e && e.message || 'failed')); });
       });
     }, Promise.resolve()).then(function () {
       closeRequestDialog();
@@ -444,7 +444,7 @@
     }).then(function () {
       if (typeof SF.renderLibraryGrid === 'function') SF.renderLibraryGrid();
       updateBulkRequest();
-      if (done) SF.switchPage('wfrequests');
+      if (done) showNewRequests(done === 1 ? lastId : null);
     });
   });
 
@@ -534,8 +534,9 @@
         : n.selfOnly ? 'Request submitted — nobody was mailed: you are the only Visual audit approver and cannot approve your own request. Add another Visual audit approver (or an admin can enable ALLOW_SELF_APPROVAL).'
         : n.failed ? 'Request submitted — mail failed: ' + (n.error || 'see the request timeline')
         : 'Request submitted — no Visual audit approvers yet, ask an admin to add them');
+      wf.newId = res.request && res.request.ROWID;
       return loadStatuses();
-    }).then(function () { SF.switchPage('wfrequests'); })
+    }).then(function () { showNewRequests(wf.newId); })
       .catch(fail).then(function () { $btn.prop('disabled', false); updateRequestPreview(); });
   });
 

@@ -740,31 +740,110 @@
   opacity: 0.9;
 }
 
-/* Library panel fits one screen: topbar 48 + content padding 40 + panel header 42 + body padding 32 + margin 12 ≈ 174px.
-   Everything except the grid keeps its own height; only the icon grid scrolls, so the upload and version bars
-   under it stay on screen without scrolling the page. */
-#libBrowseSection > .panel-body {
-  max-height: none;
+/* ── Library page layout ──────────────────────────────────────────────
+   One plain page (no collapsible panel) that fits the screen under the 48px topbar.
+   The card holds filters → icon grid → selection actions; only the grid scrolls, so the actions and the
+   repository/version footer under it stay on screen. */
+#iconLibraryPage:not(.hidden) {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 176px);
-  min-height: 420px;
+  gap: 12px;
+  flex: 0 0 auto;            /* .content is flex: 1 in the page column, which would grow it to the full icon list */
+  height: calc(100vh - 48px); /* border-box: includes the 20px content padding; 48 = topbar */
+  min-height: 600px;
+  box-sizing: border-box;
+}
+.lib-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  box-shadow: var(--shadow-card);
   overflow: hidden;
 }
-#libBrowseSection > .panel-body > :not(#libGrid) { flex: 0 0 auto; }
 
-/* version + repository bars sit under the grid */
-.lib-grid-footer { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
-.lib-grid-footer .lib-version-bar, .lib-grid-footer .lib-repo-bar { margin-bottom: 0; }
-.lib-upload-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--bg-hover); }
-.lib-upload-hint { margin: 0; font-size: 11.5px; color: var(--text-tertiary); flex: 1 1 320px; }
+/* 1. Filters */
+.lib-filterbar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--border-light);
+}
+.lib-filter-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lib-search {
+  position: relative;
+  flex: 1 1 280px;
+  min-width: 200px;
+  color: var(--text-tertiary);
+}
+.lib-search svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.lib-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0 12px 0 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+.lib-search-input:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-glow); }
+.lib-result-count { font-size: 12px; color: var(--text-tertiary); white-space: nowrap; }
+.lib-result-count b { color: var(--text-primary); font-weight: 600; }
+.lib-filterbar .lib-source-filter, .lib-filterbar .vf-status-filter { margin: 0; }
+.lib-sort { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-tertiary); white-space: nowrap; }
+.lib-sort select {
+  height: 32px; padding: 0 28px 0 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-input); color: var(--text-primary); font: inherit; font-size: 13px; cursor: pointer;
+}
+.lib-sort select:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-glow); }
+
+/* 2. Icons: the grid takes every free pixel and scrolls */
 #libBrowseSection #libGrid {
   flex: 1 1 auto;
-  min-height: 120px;
+  min-height: 160px;
   overflow-y: auto;
   align-content: start;
-  padding: 2px 6px 2px 2px;
+  padding: 16px 20px;
+  scrollbar-gutter: stable; /* the scrollbar never eats into the right-hand space */
 }
+
+/* 3. Selection actions */
+.lib-actionbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-hover);
+}
+.lib-selected-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-light);
+  white-space: nowrap;
+}
+
+/* admin category tools: right end of the bar (wrap under the selection buttons on narrow screens) */
+.lib-actionbar .lib-cat-bulk { margin-left: auto; }
+
+/* 4. Repository + versions footer */
+.lib-footer { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; }
+.lib-footer .lib-repo-bar, .lib-footer .lib-version-bar { margin-bottom: 0; }
+.lib-repo-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 /* Icon grid */
 .lib-grid {

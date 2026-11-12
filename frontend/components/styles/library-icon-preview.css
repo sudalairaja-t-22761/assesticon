@@ -1,66 +1,71 @@
 /* ============================================================
    ICON LIBRARY — right-side icon preview (colours, preview, code)
    ============================================================ */
-.lib-preview-panel { --right-panel-w: 320px; background: var(--bg-panel); }
-.lpp-inner { padding: 18px 18px 24px; display: flex; flex-direction: column; gap: 10px; }
-.lpp-head { display: flex; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--border-light); }
-.lpp-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lpp-close { border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); display: flex; }
+/* Compact: a narrow panel (the icon grid keeps the room) with small type and tight spacing. */
+/* A card beside the icon list (placePanel() sets top + height from the Library card), not a full-height sidebar. */
+.lib-preview-panel {
+  --right-panel-w: 272px; background: var(--bg-panel);
+  right: 20px; border: 1px solid var(--border-light); border-radius: 10px; box-shadow: var(--shadow-card);
+}
+.main.has-right-panel-wide.has-right-panel-lib { margin-right: 284px; } /* 272 card + 20 right inset − 20 content padding + 12 gap */
+.lpp-inner { padding: 12px 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.lpp-head { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--border-light); }
+.lpp-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lpp-close { border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; padding: 3px; border-radius: var(--radius-sm); display: flex; }
 .lpp-close:hover { color: var(--text-primary); background: var(--bg-hover); }
 
-.lpp-label { margin-top: 8px; font-size: 13px; font-weight: 500; letter-spacing: .3px; text-transform: uppercase; color: var(--text-primary); }
+.lpp-label { margin-top: 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--text-tertiary); }
 
 .lpp-swatches {
-  display: flex; flex-wrap: wrap; gap: 10px; padding: 12px; border-radius: 10px;
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-panel));
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-panel));
 }
 .lpp-swatch {
-  width: 22px; height: 22px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; background: var(--sw);
+  width: 18px; height: 18px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; background: var(--sw);
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08); transition: transform .12s ease;
 }
 .lpp-swatch:hover { transform: scale(1.12); }
 .lpp-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.lpp-swatch.is-active { box-shadow: 0 0 0 3px var(--bg-panel), 0 0 0 5px var(--sw); }
-.lpp-swatch[data-color="white"].is-active { box-shadow: 0 0 0 3px var(--bg-panel), 0 0 0 5px var(--text-tertiary); }
+.lpp-swatch.is-active { box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 4px var(--sw); }
+.lpp-swatch[data-color="white"].is-active { box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 4px var(--text-tertiary); }
 
 .lpp-preview {
-  width: 200px; height: 200px; margin: 4px auto; border-radius: 12px; display: flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
+  position: relative; width: 100%; height: 96px; margin: 0; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
 }
-.lpp-preview img { width: 40px; height: 40px; object-fit: contain; }
-.lpp-note { font-size: 12px; line-height: 1.4; color: var(--warning, #B26B00); background: color-mix(in srgb, #F18E0A 12%, var(--bg-panel)); border-radius: 8px; padding: 8px 10px; }
+.lpp-preview img { width: 32px; height: 32px; object-fit: contain; }
+.lpp-note { font-size: 11.5px; line-height: 1.4; color: var(--warning, #B26B00); background: color-mix(in srgb, #F18E0A 12%, var(--bg-panel)); border-radius: 6px; padding: 6px 8px; }
 .lpp-note.hidden { display: none; }
 
 .lpp-box {
-  position: relative; padding: 14px 16px; border: 1px solid var(--border-light); border-radius: 8px;
-  background: var(--bg-input); font-size: 13px; color: var(--text-primary); line-height: 1.45;
+  position: relative; padding: 8px 10px; border: 1px solid var(--border-light); border-radius: 6px;
+  background: var(--bg-input); font-size: 12px; color: var(--text-primary); line-height: 1.45;
 }
-.lpp-code { padding-right: 40px; }
-.lpp-code code { font-family: inherit; white-space: pre-wrap; word-break: break-word; }
-.lpp-copy { position: absolute; top: 8px; right: 8px; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); display: flex; }
+.lpp-code { padding-right: 32px; }
+.lpp-code code { font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.lpp-copy { position: absolute; top: 4px; right: 4px; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); display: flex; }
 .lpp-copy:hover { color: var(--accent); background: var(--bg-hover); }
 
 /* Size + Stroke width (icons on the stroke-icon list) */
-.lpp-opts { display: flex; flex-direction: column; gap: 10px; }
+.lpp-opts { display: flex; flex-direction: column; gap: 6px; }
 .lpp-seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--accent); border-radius: 999px; overflow: hidden; }
 .lpp-seg button {
-  min-width: 52px; height: 34px; padding: 0 14px; border: 0; border-left: 1px solid var(--accent); background: var(--bg-panel);
-  color: var(--text-primary); font-size: 13px; cursor: pointer;
+  min-width: 36px; height: 26px; padding: 0 9px; border: 0; border-left: 1px solid var(--accent); background: var(--bg-panel);
+  color: var(--text-primary); font-size: 12px; cursor: pointer;
 }
 .lpp-seg button:first-child { border-left: 0; }
 .lpp-seg button:hover { background: var(--bg-hover); }
 .lpp-seg button.is-active { background: color-mix(in srgb, var(--accent) 16%, var(--bg-panel)); font-weight: 600; }
 .lpp-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.lpp-preview { position: relative; }
-.lpp-px { position: absolute; bottom: 8px; left: 0; right: 0; text-align: center; font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-tertiary); }
-.lpp-css-head { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--text-tertiary); margin-bottom: 6px; }
-#lppCss { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+.lpp-px { position: absolute; bottom: 6px; left: 0; right: 0; text-align: center; font: 500 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-tertiary); }
+.lpp-css-head { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--text-tertiary); margin-bottom: 4px; }
+#lppCss { font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
 
 
 /* Icon categories (library-icon-categories.js) */
 .lpp-cats { display: flex; flex-wrap: wrap; gap: 6px; }
 .lpp-cats.hidden, .lib-cat-bulk.hidden, .lcat-overlay.hidden { display: none; }
-.lpp-cat { padding: 2px 10px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel)); color: var(--accent-text, var(--accent)); font-size: 12px; font-weight: 500; }
+.lpp-cat { padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel)); color: var(--accent-text, var(--accent)); font-size: 11px; font-weight: 500; }
 .lib-cat-bulk { display: inline-flex; align-items: center; gap: 8px; padding-left: 10px; border-left: 1px solid var(--border); flex-wrap: wrap; }
 .lib-cat-bulk select { height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-input); color: var(--text-primary); font-size: 13px; max-width: 180px; }
 .lcat { width: min(560px, 100%); max-height: min(640px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 18px; background: var(--bg-panel); color: var(--text-primary); border-radius: 14px; box-shadow: 0 24px 64px rgba(0, 0, 0, .3); overflow: auto; }
@@ -78,7 +83,7 @@
 #libGrid .lib-card.lib-previewing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 
 /* ── Edit in studio (library-icon-studio.js) ───────────────────── */
-.lpp-studio-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.lpp-studio-btn { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 12px; padding: 3px 8px; }
 body.lps-open { overflow: hidden; }
 .lps-overlay { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(15, 23, 42, .55); }
 .lps-overlay.hidden, .lps .hidden { display: none !important; }
