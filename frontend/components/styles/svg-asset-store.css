@@ -15,6 +15,7 @@
 }
 .as-group-title:first-child { margin-top: 0; }
 .as-group-title span { font-size: 11px; font-weight: 500; color: var(--text-tertiary); }
+.as-category-empty { padding: 8px 0 12px; color: var(--text-tertiary); font-size: 12px; }
 
 .as-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 8px 0 4px; }
 .as-card {

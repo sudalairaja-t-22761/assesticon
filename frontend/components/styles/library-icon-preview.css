@@ -35,6 +35,12 @@
   position: relative; padding: 14px 16px; border: 1px solid var(--border-light); border-radius: 8px;
   background: var(--bg-input); font-size: 13px; color: var(--text-primary); line-height: 1.45;
 }
+.lpp-related { display: flex; flex-direction: column; gap: 8px; }
+.lpp-related.hidden { display: none; }
+.lpp-related-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-height: 320px; overflow: auto; }
+.lpp-related-item { min-width: 0; padding: 8px; border: 1px solid var(--border-light); border-radius: 8px; background: var(--bg-input); }
+.lpp-related-item img { display: block; width: 100%; height: 88px; object-fit: contain; }
+.lpp-related-item span { display: block; margin-top: 6px; overflow: hidden; color: var(--text-secondary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .lpp-code { padding-right: 40px; }
 .lpp-code code { font-family: inherit; white-space: pre-wrap; word-break: break-word; }
 .lpp-copy { position: absolute; top: 8px; right: 8px; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); display: flex; }

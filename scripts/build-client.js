@@ -102,6 +102,7 @@ html = html.replace("@@LOADERS@@", `<script src="${loadersName}"></script>`).rep
 write("index.html", html);
 for (const f of ["config.js", "favicon.svg", "client-package.json"]) fs.copyFileSync(path.join(ROOT, f), path.join(OUT, f));
 copyDir("components/javascript/vendor"); // loaded on demand by create-svg.js (import('./vendor/potrace.esm.js'))
+copyDir("assets");
 
 const size = (rel) => (fs.statSync(path.join(OUT, rel)).size / 1024).toFixed(0) + " KB";
 console.log(`Client built in frontend/dist:

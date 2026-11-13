@@ -135,6 +135,10 @@
               '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
             '</button></div>' +
           '<div class="lpp-box" id="lppSize"></div>' +
+          '<div class="lpp-related hidden" id="lppRelatedIllustration">' +
+            '<div class="lpp-label">Related illustration</div>' +
+            '<div class="lpp-related-items" id="lppRelatedIllustrationItems"></div>' +
+          '</div>' +
         '</div>' +
       '</aside>'
     );
@@ -157,6 +161,21 @@
     $('#lppCode').text(code(current, c));
     var s = size(current);
     $('#lppSize').text(s ? 'Width: ' + s.w + 'px, Height: ' + s.h + 'px' : 'Size unknown');
+    var selectedIcon = current;
+    $('#lppRelatedIllustration').addClass('hidden');
+    if (typeof SF.findRelatedIllustrations === 'function') {
+      SF.findRelatedIllustrations(baseName(current), svg ? dataUri(svg) : current.openPath).then(function (illustrations) {
+        if (!illustrations.length || current !== selectedIcon) return;
+        var $items = $('#lppRelatedIllustrationItems').empty();
+        illustrations.forEach(function (illustration) {
+          var $item = $('<div class="lpp-related-item"><img alt=""><span></span></div>');
+          $item.find('img').attr({ src: illustration.url, alt: illustration.name });
+          $item.find('span').text(illustration.name);
+          $items.append($item);
+        });
+        $('#lppRelatedIllustration').removeClass('hidden');
+      });
+    }
     $('#libGrid .lib-card').removeClass('lib-previewing').filter(function () { return $(this).data('iconId') === current.id; }).addClass('lib-previewing');
   }
 
