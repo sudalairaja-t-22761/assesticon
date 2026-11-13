@@ -243,7 +243,7 @@
           '</div>' +
           '<div class="modal-body lvm-body">' +
             '<div class="lvm-top">' +
-              '<div class="lvm-stage"><img id="lvmImg" alt=""></div>' +
+              '<div class="lvm-stage" id="lvmStage"></div>' +
               '<div class="lvm-info">' +
                 '<div class="lvm-label">Code</div>' +
                 '<div class="lvm-code"><code id="lvmCode"></code><button type="button" class="lvm-copy" id="lvmCopyCode" title="Copy code" aria-label="Copy code">' + COPY + '</button></div>' +
@@ -270,14 +270,55 @@
     );
   }
 
-  function thumbSrc(icon, color) {
-    var svg = svgOf(icon);
-    if (!svg) return icon.openPath || '';
-    var p = P();
-    if (!p) return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  /** The icon's SVG as shown in the popup: repainted in `color` (if given) and widened to the whole drawing. */
+  function thumbSvg(icon, color) {
+    var svg = svgOf(icon), p = P();
+    if (!svg || !p) return svg;
     var fit = p.measure(icon);
     if (color) svg = p.coloredSvg(svg, color);
-    return p.dataUri(fit.overflow ? p.withViewBox(svg, fit.box) : svg);
+    return fit.overflow ? p.withViewBox(svg, fit.box) : svg;
+  }
+
+  /**
+   * `svg` text as a real <svg> element (not an <img>), or null when the text holds none. It sits in a shadow root so
+   * its own <style> rules and ids never reach the page (or another icon), and it is cleaned first: inline SVG runs
+   * script, an <img> does not. The returned host is sized by CSS (.lvm-svg); the drawing scales into it.
+   */
+  function inlineSvg(svg, label) {
+    var tpl = document.createElement('template');   // inert: nothing loads or runs while it is cleaned
+    tpl.innerHTML = String(svg || '').replace(/<\?xml[\s\S]*?\?>|<!DOCTYPE[\s\S]*?>/gi, '');
+    var el = tpl.content.querySelector('svg');
+    if (!el) return null;
+    Array.prototype.slice.call(el.querySelectorAll('script, foreignObject, iframe, object, embed, animate[attributeName$="href"], set[attributeName$="href"]'))
+      .forEach(function (n) { n.remove(); });
+    [el].concat(Array.prototype.slice.call(el.querySelectorAll('*'))).forEach(function (n) {
+      Array.prototype.slice.call(n.attributes).forEach(function (a) {
+        var name = a.name.toLowerCase();
+        if (name.indexOf('on') === 0 || (/(^|:)href$/.test(name) && !/^\s*(#|data:image\/)/i.test(a.value))) n.removeAttribute(a.name);
+      });
+    });
+    var w = parseFloat(el.getAttribute('width')), h = parseFloat(el.getAttribute('height'));
+    if (!el.hasAttribute('viewBox') && w > 0 && h > 0) el.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+    el.removeAttribute('width'); el.removeAttribute('height');
+
+    var host = document.createElement('span');
+    host.className = 'lvm-svg';
+    if (label) { host.setAttribute('role', 'img'); host.setAttribute('aria-label', label); }
+    var root = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
+    var css = document.createElement('style');
+    css.textContent = 'svg{display:block;width:100%;height:100%;color:#000}';   // currentColor as in an <img>: black, not the page text colour
+    root.appendChild(css);
+    root.appendChild(el);
+    return host;
+  }
+  /** Inline <svg> for an icon; an <img> only while a hosted icon's SVG text has not been fetched yet. */
+  function iconNode(icon, color, label) {
+    var node = inlineSvg(thumbSvg(icon, color), label);
+    if (node) return node;
+    var img = document.createElement('img');
+    img.alt = label || '';
+    if (icon.openPath) img.src = icon.openPath;
+    return img;
   }
 
   function renderHead(icon) {
@@ -286,7 +327,7 @@
     var color = p ? p.colorOf(p.themeColorKey()) : null, dark = !!color && color.key === 'white';
     $('#lvmTitle').text(name);
     $('#lvmSub').text(icon.source === 'repo' && icon.sprite ? icon.sprite + '.svg' : '');
-    $('#lvmImg').attr('src', thumbSrc(icon, dark ? color : null)).attr('alt', name);
+    $('#lvmStage').empty().append(iconNode(icon, dark ? color : null, name));
     $('#lvmCode').text(p ? p.code(icon, color) : name);
     var m = /viewBox\s*=\s*["']\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(svg);
     var w = icon.width || (m && +m[1]), h = icon.height || (m && +m[2]);
@@ -304,15 +345,16 @@
   function renderSimilar(icon, list) {
     var found = similarTo(icon, list), top = found.slice(0, MAX_SIMILAR);
     $('#lvmSimStatus').text(found.length ? (found.length > top.length ? 'Showing ' + top.length + ' of ' + found.length : '') : 'No similar icons found.');
-    $('#lvmSimilar').html(top.map(function (x) {
+    $('#lvmSimilar').html(top.map(function (x, i) {
       var n = baseName(x.icon), tags = '';
       if (x.look >= 0.995) tags += '<span class="lvm-tag lvm-tag-same">same drawing</span>';
       else if (x.look >= VISUAL_MIN) tags += '<span class="lvm-tag lvm-tag-look">' + Math.floor(x.look * 100) + '% look</span>';
       if (x.name >= NAME_MIN) tags += '<span class="lvm-tag">name</span>';
-      return '<button type="button" class="lvm-tile" data-icon-id="' + esc(x.icon.id) + '" title="' + esc(n + (x.icon.sprite ? ' — ' + x.icon.sprite + '.svg' : '')) + '">' +
-        '<span class="lvm-thumb"><img alt="" loading="lazy" src="' + esc(thumbSrc(x.icon)) + '"></span>' +
+      return '<button type="button" class="lvm-tile" data-icon-id="' + esc(x.icon.id) + '" data-sim="' + i + '" title="' + esc(n + (x.icon.sprite ? ' — ' + x.icon.sprite + '.svg' : '')) + '">' +
+        '<span class="lvm-thumb"></span>' +
         '<span class="lvm-name">' + esc(n) + '</span><span class="lvm-tags">' + tags + '</span></button>';
     }).join(''));
+    top.forEach(function (x, i) { $('#lvmSimilar [data-sim="' + i + '"] .lvm-thumb').append(iconNode(x.icon)); });
   }
 
   function loadSimilar(icon, id) {
@@ -419,7 +461,14 @@
       var $t = $('#lvmArt [data-art="' + i + '"]').data('path', x.f.path);
       store.fetchImage(x.f).then(function (b) {
         if (id !== runId) return;
-        $t.find('.lvm-thumb').html($('<img alt="">').attr('src', b.url));
+        var img = function () { $t.find('.lvm-thumb').html($('<img alt="">').attr('src', b.url)); };
+        // SVG files are drawn as inline <svg>; other formats (PNG, GIF…) can only be an <img>.
+        if (!/^svg$/i.test(x.f.ext || '')) return img();
+        fetch(b.url).then(function (r) { return r.text(); }).then(function (text) {
+          if (id !== runId) return;
+          var node = inlineSvg(text);
+          if (node) $t.find('.lvm-thumb').empty().append(node); else img();
+        }, img);
       }, function () { $t.find('.lvm-loading').text('failed'); });
     });
   }
