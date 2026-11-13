@@ -1,0 +1,61 @@
+/* ============================================================
+   ANIMATE ICON page (animate-icon.js) — shares the .cmb-* layout pieces of svg-combine-icons.css
+   ============================================================ */
+#animateIconPage.content { max-width: 1280px; }
+.ani-results { max-height: 560px; }
+.ani-results .cmb-tile.is-active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+
+.ani-stage {
+  width: 100%; max-width: 360px; aspect-ratio: 1; align-self: center; padding: 48px; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--ani-ink);
+  border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--ani-board);
+  --ani-ink: #313949; --ani-board: #fff;
+}
+.ani-stage.is-empty { color: var(--text-tertiary); }
+.ani-play { justify-content: center; margin-top: 0; }
+
+.ani-parts { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; padding: 2px; }
+.ani-part {
+  display: flex; align-items: center; gap: 10px; min-width: 0; padding: 5px 8px; cursor: pointer; font-size: 12px;
+  border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-panel); color: var(--text-primary);
+}
+.ani-part:hover, .ani-part:focus-visible { border-color: var(--accent); outline: none; }
+.ani-part.is-active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.ani-part-thumb { flex: none; width: 24px; height: 24px; color: var(--text-primary); }
+.ani-part-thumb svg { display: block; width: 24px; height: 24px; fill: currentColor; overflow: visible; }
+.ani-part-name { flex: none; }
+.ani-part-anim { flex: 1; min-width: 0; text-align: right; color: var(--accent-text, var(--accent)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ani-part-anim.is-none { color: var(--text-tertiary); }
+.ani-part-x {
+  flex: none; width: 22px; height: 22px; line-height: 20px; text-align: center; font-size: 14px; cursor: pointer;
+  border: none; border-radius: var(--radius-xs); background: transparent; color: var(--text-tertiary);
+}
+.ani-part-x:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.ani-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.ani-preset {
+  height: 30px; padding: 0 4px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-panel); color: var(--text-primary);
+}
+.ani-preset:hover:not(:disabled) { border-color: var(--accent); }
+.ani-preset.is-active { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent-text, var(--accent)); font-weight: 600; }
+.ani-preset:disabled { opacity: .4; cursor: not-allowed; }
+.ani-presets.is-off, .ani-tune.is-off { opacity: .45; pointer-events: none; }
+.ani-tune { display: flex; flex-direction: column; gap: 8px; }
+
+/* custom steps */
+.ani-steps { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border-light); }
+.ani-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.ani-chip {
+  height: 26px; padding: 0 9px; font: inherit; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--border-light); border-radius: 13px; background: var(--bg-panel); color: var(--text-primary);
+}
+.ani-chip:hover { border-color: var(--accent); }
+.ani-chip.is-active { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent-text, var(--accent)); font-weight: 600; }
+.ani-chip-add { border-style: dashed; color: var(--text-secondary); }
+.ani-sliders { display: flex; flex-direction: column; gap: 6px; }
+.ani-slider { display: grid; grid-template-columns: 58px 1fr 44px; align-items: center; gap: 8px; font-size: 11px; color: var(--text-secondary); }
+.ani-slider input[type="range"] { width: 100%; min-width: 0; margin: 0; accent-color: var(--accent); }
+.ani-slider output { text-align: right; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+[data-theme="dark"] .ani-stage { --ani-ink: #fff; --ani-board: #1A2130; }

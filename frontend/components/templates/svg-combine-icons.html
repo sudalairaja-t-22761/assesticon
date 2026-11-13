@@ -1,0 +1,74 @@
+<div class="content hidden" id="combineIconsPage">
+  <div class="panel">
+    <div class="panel-header">
+      <h3 class="panel-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="12" height="12" rx="2"/><rect x="9" y="9" width="12" height="12" rx="2"/>
+        </svg>
+        Combine icons
+      </h3>
+      <div class="panel-actions">
+        <button class="btn btn-ghost btn-sm" id="cmbClear">Start over</button>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div class="cmb">
+
+        <!-- 1 · pick the two icons -->
+        <div class="cmb-col cmb-pick">
+          <div class="cmb-label">1 · Pick two icons</div>
+          <div class="cmb-slots" id="cmbSlots"></div>
+          <input type="search" class="cmb-input" id="cmbSearch" placeholder="Search the Icon Library…" autocomplete="off">
+          <div class="cmb-status" id="cmbPickStatus"></div>
+          <div class="cmb-results" id="cmbResults"></div>
+        </div>
+
+        <!-- 2 · arrange them -->
+        <div class="cmb-col cmb-stage">
+          <div class="cmb-label">2 · Arrange on the canvas <span class="cmb-hint">24 × 24</span></div>
+          <svg id="cmbCanvas" class="cmb-canvas" viewBox="-4 -4 32 32" tabindex="0" role="application"
+               aria-label="Canvas: drag an icon to move it, a corner to resize it, the top handle to rotate it"></svg>
+          <div class="cmb-hint">Drag to move · corner handle to resize · top handle to rotate (Shift: 15° steps) · arrow keys to nudge · Alt: no snapping</div>
+          <div class="cmb-warn" id="cmbWarn"></div>
+        </div>
+
+        <!-- 3 · fine-tune, name, add -->
+        <div class="cmb-col cmb-side">
+          <div class="cmb-label">Selected icon</div>
+          <div class="cmb-layer" id="cmbLayer">
+            <div class="cmb-fields">
+              <label>X <input type="number" class="cmb-input" id="cmbX" step="0.25"></label>
+              <label>Y <input type="number" class="cmb-input" id="cmbY" step="0.25"></label>
+              <label>Size % <input type="number" class="cmb-input" id="cmbSize" step="5" min="2" max="400"></label>
+              <label>Rotate ° <input type="number" class="cmb-input" id="cmbRot" step="15"></label>
+            </div>
+            <div class="cmb-btns">
+              <button type="button" class="btn btn-ghost btn-sm" id="cmbFlip">Flip</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="cmbCentre">Centre</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="cmbFront">Bring to front</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="cmbReset">Reset</button>
+            </div>
+          </div>
+
+          <label class="cmb-check">
+            <input type="checkbox" id="cmbCut"> Cut a gap around the top icon
+          </label>
+          <label class="cmb-inline">Gap <input type="number" class="cmb-input" id="cmbGap" step="0.25" min="0" max="6" value="1"></label>
+
+          <div class="cmb-label">Preview</div>
+          <div class="cmb-preview" id="cmbPreview"></div>
+
+          <div class="cmb-label">3 · Name and add</div>
+          <input type="text" class="cmb-input" id="cmbName" placeholder="icon-name" autocomplete="off" spellcheck="false">
+          <div class="cmb-status" id="cmbNameStatus"></div>
+          <div class="cmb-btns">
+            <button type="button" class="btn btn-primary btn-sm" id="cmbAdd">Add to Icon Library</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="cmbCopy">Copy SVG</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="cmbDownload">Download</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>

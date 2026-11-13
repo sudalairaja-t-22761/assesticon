@@ -297,6 +297,9 @@
         if (name.indexOf('on') === 0 || (/(^|:)href$/.test(name) && !/^\s*(#|data:image\/)/i.test(a.value))) n.removeAttribute(a.name);
       });
     });
+    // ":root" matches nothing inside a shadow root: the sprite's :root variables (--zcicn-color-white: transparent
+    // hides shapes) go on the host instead, so they still reach the icon.
+    Array.prototype.forEach.call(el.querySelectorAll('style'), function (s) { s.textContent = s.textContent.replace(/:root\b/g, ':host'); });
     var w = parseFloat(el.getAttribute('width')), h = parseFloat(el.getAttribute('height'));
     if (!el.hasAttribute('viewBox') && w > 0 && h > 0) el.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
     el.removeAttribute('width'); el.removeAttribute('height');
