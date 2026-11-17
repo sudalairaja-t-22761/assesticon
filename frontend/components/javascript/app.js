@@ -181,6 +181,67 @@
     });
   }
 
+  // ---- Sprite Settings, kept per user in the Data Store (api/user-settings) ----
+  // Loaded once after sign-in and saved on every change, so a sprite is always created or updated with the
+  // names from the user's latest saved settings, on any browser.
+  var _savedSettingsJson = '';
+
+  function _settingsSnapshot() {
+    return { settings: state.settings, tagConfig: state.tagConfig, svgo: state.svgo };
+  }
+
+  function _namingNow() {
+    return { prefix: state.settings.prefix, symbolSuffix: state.settings.symbolSuffix, gSuffix: state.settings.gSuffix };
+  }
+
+  // New icons, and icons of a loaded sprite written with a known prefix / suffix, take the current naming.
+  function _renameNewIcons() {
+    SF.applyNamingToIcons();
+  }
+
+  function _applyUserSettings(saved) {
+    if (!saved) return;
+    $.extend(state.settings, saved.settings || {});
+    ['pastPrefixes', 'pastSuffixes', 'pastGSuffixes'].forEach(function (k) {
+      if (!$.isArray(state.settings[k])) state.settings[k] = [];
+    });
+    $.extend(state.tagConfig, saved.tagConfig || {});
+    if (saved.svgo) {
+      state.svgo.enabled = !!saved.svgo.enabled;
+      state.svgo.floatPrecision = saved.svgo.floatPrecision;
+      $.extend(state.svgo.passes, saved.svgo.passes || {});
+    }
+    _savedSettingsJson = JSON.stringify(_settingsSnapshot());
+    _renameNewIcons();
+    if (state.icons.length && typeof SF.renderIconList === 'function') SF.renderIconList();
+  }
+
+  function _loadUserSettings() {
+    if (!_isHostedAuthEnabled() || !state.auth.isAuthenticated) return Promise.resolve(false);
+    return _authFetch('api/user-settings', { method: 'GET' }).then(function (data) {
+      _applyUserSettings(data && data.settings);
+      return true;
+    }).catch(function (e) {
+      console.warn('Could not load saved settings:', e && e.message);
+      return false;
+    });
+  }
+
+  // Save the current settings for the signed-in user. Skipped when nothing changed since the last save.
+  function _saveUserSettings() {
+    if (!_isHostedAuthEnabled() || !state.auth.isAuthenticated) return Promise.resolve(false);
+    var json = JSON.stringify(_settingsSnapshot());
+    if (json === _savedSettingsJson) return Promise.resolve(true);
+    return _authFetch('api/user-settings', { method: 'PUT', body: json }).then(function () {
+      _savedSettingsJson = json;
+      return true;
+    }).catch(function (e) {
+      if (e && e.response && e.response.status === 401) { _handleHostedUnauthorized(); return false; }
+      SF.showToast('Settings are applied here, but could not be saved to your account: ' + ((e && e.message) || 'request failed'));
+      return false;
+    });
+  }
+
   function _installAuthAjaxPrefilter() {
     if (_authAjaxPrefilterInstalled) return;
     _authAjaxPrefilterInstalled = true;
@@ -198,7 +259,7 @@
     return _authFetch('api/auth/session', { method: 'GET', headers: {} }).then(function (data) {
       _setAuthState(data.sessionId, data.user, data.zohoProfile);
       _updateAuthUi();
-      return data;
+      return _loadUserSettings().then(function () { return data; });
     });
   }
 
@@ -210,7 +271,7 @@
     }).then(function (data) {
       _setAuthState(data.sessionId, data.user, data.zohoProfile);
       _updateAuthUi();
-      return data;
+      return _loadUserSettings().then(function () { return data; });
     });
   }
 
@@ -499,6 +560,7 @@
   }
 
   function applyUploadModalSettings() {
+    var namingBefore = _namingNow();
     state.settings.gSuffix = $.trim($('#uploadSetGSuffix').val());
     state.settings.prefix = $.trim($('#uploadSetPrefix').val());
     state.settings.symbolSuffix = $.trim($('#uploadSetSSuffix').val());
@@ -508,12 +570,9 @@
     state.tagConfig.classAttr = $.trim($('#uploadSetClassAttr').val()) || 'icon-class';
     state.tagConfig.extraClass = $.trim($('#uploadSetExtraClass').val());
 
-    state.icons.forEach(function (icon) {
-      if (!icon.isExisting) {
-        icon.gId = SF.makeGId(icon.name);
-        icon.symbolId = SF.makeSymbolId(icon.name);
-      }
-    });
+    SF.rememberNaming(namingBefore);
+    _renameNewIcons();
+    _saveUserSettings();
   }
 
   function populateUploadModalFields() {
@@ -973,6 +1032,7 @@
       state.settings.padding = parseInt($('#setPadding').val(), 10) || 0;
       state.settings.iconsPerRow = parseInt($('#setIconsPerRow').val(), 10) || 0;
       state.settings.maxSpriteWidth = parseInt($('#setMaxSpriteWidth').val(), 10) || 0;
+      var namingBefore = _namingNow();
       state.settings.gSuffix = $('#setGSuffix').val();
       state.settings.prefix = $('#setPrefix').val();
       state.settings.symbolSuffix = $('#setSSuffix').val();
@@ -990,15 +1050,17 @@
         state.svgo.passes[$(this).data('pass')] = $(this).is(':checked');
       });
 
-      state.icons.forEach(function (icon) {
-        if (!icon.isExisting) {
-          icon.gId = SF.makeGId(icon.name);
-          icon.symbolId = SF.makeSymbolId(icon.name);
-        }
-      });
+      SF.rememberNaming(namingBefore);
+      _renameNewIcons();
 
       SF.renderIconList();
+      if (state.generatedSVG || state.generatedCSS || !$('#outputSection').hasClass('hidden')) {
+        refreshGeneratedOutput();
+      }
       $('#settingsModal').addClass('hidden');
+      _saveUserSettings().then(function (ok) {
+        if (ok) SF.showToast('Settings saved');
+      });
     });
 
     $('#setGSuffix, #setPrefix, #setSSuffix').on('input', SF.updateNamingPreview);
@@ -1379,7 +1441,7 @@
     // ---- Icon Name Editing ----
     $(document).on('change', '.icon-name-input', function () {
       var index = parseInt($(this).attr('data-index'), 10);
-      var newName = $.trim($(this).val());
+      var newName = SF.stripNameAffixes($(this).val());
 
       if (!newName) {
         alert('Icon name cannot be empty');
@@ -1388,6 +1450,10 @@
       }
 
       if (index >= 0 && index < state.icons.length) {
+        if (newName === state.icons[index].name) {
+          $(this).val(newName);
+          return;
+        }
         var duplicate = SF.iconNameConflict(newName, index);
 
         if (duplicate) {
@@ -1396,11 +1462,11 @@
           return;
         }
 
+        // A renamed icon (new or from a loaded sprite) takes the latest saved prefix / suffix
+        state.icons[index].followsNaming = true;
         state.icons[index].name = newName;
-        if (!state.icons[index].isExisting) {
-          state.icons[index].gId = SF.makeGId(newName);
-          state.icons[index].symbolId = SF.makeSymbolId(newName);
-        }
+        state.icons[index].gId = SF.makeGId(newName);
+        state.icons[index].symbolId = SF.makeSymbolId(newName);
         SF.renderIconList();
         if (state.generatedSVG || state.generatedCSS || !$('#outputSection').hasClass('hidden')) {
           refreshGeneratedOutput();

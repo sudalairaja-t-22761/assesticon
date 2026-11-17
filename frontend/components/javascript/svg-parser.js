@@ -288,12 +288,17 @@
       var name = symbolId;
       var prefix = state.settings.prefix;
       var suffix = state.settings.symbolSuffix;
+      var known = SF.splitSymbolId(symbolId); // current naming, or one used before the settings changed
 
-      if (name.indexOf(prefix) === 0) {
-        name = name.substring(prefix.length);
-      }
-      if (name.length > suffix.length && name.substring(name.length - suffix.length) === suffix) {
-        name = name.substring(0, name.length - suffix.length);
+      if (known.matched) {
+        name = known.name;
+      } else {
+        if (name.indexOf(prefix) === 0) {
+          name = name.substring(prefix.length);
+        }
+        if (name.length > suffix.length && name.substring(name.length - suffix.length) === suffix) {
+          name = name.substring(0, name.length - suffix.length);
+        }
       }
 
       var eFill = (gFill && gFill.toLowerCase() !== 'none') ? gFill : null;
@@ -304,6 +309,8 @@
         name: name,
         gId: gId,
         symbolId: symbolId,
+        sourceSymbolId: symbolId,          // id in the loaded sprite, kept to rename its CSS class
+        followsNaming: known.matched,      // written with a known prefix / suffix → renamed with the settings
         svgContent: innerContent,
         defsContent: !spriteDefsAssigned ? spriteDefs : '',
         styleContent: !spriteStylesAssigned ? spriteStyles : '',

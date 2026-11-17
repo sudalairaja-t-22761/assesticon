@@ -4,6 +4,8 @@
  * Icon verification workflow routes (all require a signed-in session):
  *
  *   GET    /api/me                      → { email, name, role, menus[] }  (menus the role may open)
+ *   GET    /api/user-settings           → { settings: { settings, tagConfig, svgo } | null, updatedAt }  the signed-in user's Sprite Settings
+ *   PUT    /api/user-settings           → { settings, tagConfig, svgo }  save them (one record per user)
  *   GET    /api/roles                   → roles + the menu catalog                              [admin]
  *   POST   /api/roles                   → { name, menus[] }  create a custom role               [admin]
  *   PATCH  /api/roles/:key              → { menus[] }  set the menus a role may open            [admin]
@@ -91,7 +93,7 @@ function parseApprover(v) {
 function createWorkflowRouter({ requireSession }) {
     const router = express.Router();
     // Mounted at /api, so gate only our own paths (other /api routes stay as they were).
-    router.use(["/me", "/users", "/share-users", "/org-users", "/members", "/roles", "/mail", "/icon-status", "/icon-categories", "/requests", "/activity-log"], requireSession);
+    router.use(["/me", "/user-settings", "/users", "/share-users", "/org-users", "/members", "/roles", "/mail", "/icon-status", "/icon-categories", "/requests", "/activity-log"], requireSession);
 
     const me = (req) => req.auth.session.user;
 
@@ -170,6 +172,51 @@ function createWorkflowRouter({ requireSession }) {
         const u = me(req);
         const access = await getAccess(req, u.email);
         res.json({ success: true, email: u.email, name: u.name, role: access.role, menus: access.menus });
+    }));
+
+    // ── Sprite Settings, kept per user ──────────────────────────────────────
+    // One `user_settings` record per email. Only known fields are stored, so a record always fits and stays readable.
+    const SVGO_PASSES = ["removeComments", "removeMetadata", "removeEditorData", "removeUnusedNS", "removeDefaultAttrs", "removeEmptyDefs",
+        "removeEmptyGroups", "removeEmptyStyles", "removeXmlSpace", "cleanupNumericValues", "collapseWhitespace", "minify"];
+    const num = (v, max) => Math.min(max, Math.max(0, parseInt(v, 10) || 0));
+    const past = (v) => (Array.isArray(v) ? v : []).slice(0, 6).map((x) => str(x, 60));
+    function cleanUserSettings(body) {
+        const s = (body && body.settings) || {}, t = (body && body.tagConfig) || {}, o = (body && body.svgo) || {};
+        const passes = {};
+        for (const k of SVGO_PASSES) passes[k] = !!(o.passes && o.passes[k]);
+        return {
+            settings: {
+                spacing: num(s.spacing, 100), rowGap: num(s.rowGap, 100), padding: num(s.padding, 100),
+                iconsPerRow: num(s.iconsPerRow, 100), maxSpriteWidth: num(s.maxSpriteWidth, 10000),
+                gSuffix: str(s.gSuffix, 60), prefix: str(s.prefix, 60), symbolSuffix: str(s.symbolSuffix, 60),
+                // naming used before the current one: icons of a loaded sprite written with it are renamed
+                pastPrefixes: past(s.pastPrefixes), pastSuffixes: past(s.pastSuffixes), pastGSuffixes: past(s.pastGSuffixes)
+            },
+            tagConfig: {
+                tagName: str(t.tagName, 60).trim() || "crmutil-icon", nameAttr: str(t.nameAttr, 60).trim() || "icon-name",
+                classAttr: str(t.classAttr, 60).trim() || "icon-class", extraClass: str(t.extraClass, 200).trim()
+            },
+            svgo: { enabled: !!o.enabled, floatPrecision: Math.min(8, Math.max(0, parseInt(o.floatPrecision, 10) || 0)), passes }
+        };
+    }
+    const settingsRows = async (db, email) => (await db.all("user_settings")).filter((r) => norm(r.userEmail) === norm(email));
+
+    router.get("/user-settings", wrap(async (req, res) => {
+        const rows = await settingsRows(store.forRequest(req), me(req).email);
+        const row = rows[rows.length - 1];
+        res.json({ success: true, settings: row ? { settings: row.settings, tagConfig: row.tagConfig, svgo: row.svgo } : null, updatedAt: row ? row.updatedAt : "" });
+    }));
+
+    router.put("/user-settings", wrap(async (req, res) => {
+        const email = me(req).email;
+        if (!email) return res.status(400).json({ success: false, message: "This session has no email" });
+        const db = store.forRequest(req);
+        const fields = { userEmail: norm(email), ...cleanUserSettings(req.body), updatedAt: new Date().toISOString() };
+        const rows = await settingsRows(db, email);
+        if (rows.length) await db.update("user_settings", rows[rows.length - 1].ROWID, fields);
+        else await db.insert("user_settings", fields);
+        for (const extra of rows.slice(0, -1)) await db.remove("user_settings", extra.ROWID); // two first saves at once
+        res.json({ success: true, settings: { settings: fields.settings, tagConfig: fields.tagConfig, svgo: fields.svgo }, updatedAt: fields.updatedAt });
     }));
 
     // ── users + members (admin) ─────────────────────────────────────────────

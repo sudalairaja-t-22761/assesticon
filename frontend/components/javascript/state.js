@@ -31,7 +31,12 @@ window.SpriteForge = window.SpriteForge || {};
       maxSpriteWidth: 0, // 0 = auto-calculate balanced layout
       gSuffix: 'CrmZCI',
       prefix: 'zcicn-',
-      symbolSuffix: '__s'
+      symbolSuffix: '__s',
+      // Prefixes / suffixes used before the current ones (newest first). An icon of a loaded sprite that still
+      // carries one of them is stripped and renamed to the current naming.
+      pastPrefixes: [],
+      pastSuffixes: [],
+      pastGSuffixes: []
     },
     doc: {
       scale: 48,

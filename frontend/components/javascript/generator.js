@@ -107,7 +107,8 @@
     // Update Sprite with a loaded stylesheet: keep it and append only what is new.
     var css;
     if (state.mode === 'existing' && state.sourceCssText) {
-      css = SF.mergeStylesheet(state.sourceCssText, state.icons);
+      // Loaded icons renamed since (settings change or by hand) take their class with them.
+      css = SF.mergeStylesheet(SF.renameStylesheetClasses(state.sourceCssText, state.icons), state.icons);
     } else {
       css = _sizeRules(state.icons).join('\n');
     }

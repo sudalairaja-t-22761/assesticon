@@ -7,6 +7,10 @@
 
   var state = SF.state;
 
+  var _nsProbe = document.createElement('div');
+  _nsProbe.innerHTML = '<svg></svg>';
+  var SVG_NAMESPACE = _nsProbe.firstChild.namespaceURI;
+
   /**
    * Build preview attributes for an icon's SVG element.
    * Shared logic for all icon preview rendering across the app.
@@ -307,7 +311,7 @@
     }
     var defs = icon.defsContent ? '<defs>' + icon.defsContent + '</defs>' : '';
     var style = icon.styleContent ? '<style>' + icon.styleContent + '</style>' : '';
-    var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' +
+    var svg = '<svg xmlns="' + SVG_NAMESPACE + '" viewBox="' +
       icon.originX + ' ' + icon.originY + ' ' + icon.width + ' ' + icon.height +
       '" width="48" height="48"' + previewAttrs + '>' + defs + style + icon.svgContent + '</svg>';
 
@@ -383,6 +387,111 @@
   /** Generate the <symbol> / CSS class ID from base name */
   SF.makeSymbolId = function (name) {
     return state.settings.prefix + name + state.settings.symbolSuffix;
+  };
+
+  // Naming the tool ships with: always recognised, so a sprite made with it can be renamed after the settings change.
+  SF.NAMING_DEFAULTS = { prefix: 'zcicn-', symbolSuffix: '__s', gSuffix: 'CrmZCI' };
+
+  /** Current value first, then the ones used before, then the default. kind: 'prefix' | 'symbolSuffix' | 'gSuffix' */
+  SF.knownAffixes = function (kind) {
+    var past = { prefix: 'pastPrefixes', symbolSuffix: 'pastSuffixes', gSuffix: 'pastGSuffixes' }[kind];
+    var list = [state.settings[kind]].concat(state.settings[past] || [], [SF.NAMING_DEFAULTS[kind]]);
+    var seen = {}, out = [];
+    list.forEach(function (v) {
+      v = String(v == null ? '' : v);
+      if (!seen['k' + v]) { seen['k' + v] = true; out.push(v); }
+    });
+    return out;
+  };
+
+  /** Remember the naming that is being replaced, so sprites made with it are still recognised. */
+  SF.rememberNaming = function (before) {
+    [['prefix', 'pastPrefixes'], ['symbolSuffix', 'pastSuffixes'], ['gSuffix', 'pastGSuffixes']].forEach(function (p) {
+      var old = String(before[p[0]] == null ? '' : before[p[0]]);
+      if (old === String(state.settings[p[0]] == null ? '' : state.settings[p[0]])) return;
+      var list = (state.settings[p[1]] || []).filter(function (v) { return v !== old; });
+      list.unshift(old);
+      state.settings[p[1]] = list.slice(0, 6);
+    });
+  };
+
+  /**
+   * Base name of a symbol / class id written with the current naming or one used before.
+   * The longest known prefix and suffix win ("zcicn-notify__s" → "notify" when "__s" was used before).
+   * matched is false when the id follows none of them — such an icon is never renamed automatically.
+   * @returns {{name:string, matched:boolean}}
+   */
+  SF.splitSymbolId = function (id) {
+    id = String(id || '');
+    var best = function (list, test) {
+      var hit = null;
+      list.forEach(function (v) { if (test(v) && (hit === null || v.length > hit.length)) hit = v; });
+      return hit;
+    };
+    var prefix = best(SF.knownAffixes('prefix'), function (p) { return id.length > p.length && id.indexOf(p) === 0; });
+    if (prefix === null) return { name: id, matched: false };
+    var rest = id.substring(prefix.length);
+    var suffix = best(SF.knownAffixes('symbolSuffix'), function (s) {
+      return rest.length > s.length && rest.substring(rest.length - s.length) === s;
+    });
+    if (suffix === null) return { name: id, matched: false };
+    return { name: rest.substring(0, rest.length - suffix.length), matched: true };
+  };
+
+  /**
+   * Give the icons that follow the naming settings their current ids: icons added by hand always, icons of a
+   * loaded sprite when their id was written with a known prefix / suffix (followsNaming).
+   * An id another icon already has is never taken.
+   * @returns {number} loaded-sprite icons whose id changed
+   */
+  SF.applyNamingToIcons = function () {
+    var used = {};
+    // Ids that stay as they are: loaded icons outside the naming, and loaded icons already named correctly.
+    state.icons.forEach(function (i) {
+      if (i.isExisting && (!i.followsNaming || i.symbolId === SF.makeSymbolId(i.name))) used[i.symbolId] = true;
+    });
+    var renamed = 0;
+    state.icons.forEach(function (icon) {
+      if (icon.isExisting && !icon.followsNaming) return;
+      var next = SF.makeSymbolId(icon.name);
+      if (!icon.isExisting) {
+        icon.symbolId = next;
+        icon.gId = SF.makeGId(icon.name);
+        return;
+      }
+      if (next === icon.symbolId) return; // already named correctly: its <g> id is left alone too
+      if (used[next]) { used[icon.symbolId] = true; return; } // another icon has that id: keep what it has
+      used[next] = true;
+      icon.symbolId = next;
+      icon.gId = SF.makeGId(icon.name);
+      renamed++;
+    });
+    return renamed;
+  };
+
+  /** Class renames for the loaded stylesheet: original class → current class, for loaded icons that were renamed. */
+  SF.renameStylesheetClasses = function (cssText, icons) {
+    var out = String(cssText || '');
+    (icons || []).forEach(function (icon) {
+      var from = icon.sourceSymbolId, to = icon.symbolId;
+      if (!icon.isExisting || !from || from === to) return;
+      out = out.replace(new RegExp('\\.' + from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w-])', 'g'), '.' + to);
+    });
+    return out;
+  };
+
+  /** Remove the current symbol prefix / suffix from an icon name so only the base name remains */
+  SF.stripNameAffixes = function (name) {
+    var out = String(name || '').trim();
+    var prefix = state.settings.prefix || '';
+    var suffix = state.settings.symbolSuffix || '';
+    if (prefix && out.length > prefix.length && out.indexOf(prefix) === 0) {
+      out = out.substring(prefix.length);
+    }
+    if (suffix && out.length > suffix.length && out.substring(out.length - suffix.length) === suffix) {
+      out = out.substring(0, out.length - suffix.length);
+    }
+    return out;
   };
 
   // ── Loaded stylesheet + duplicate guard (Update Sprite mode) ─────────────
@@ -539,8 +648,8 @@
   /** Remove redundant xmlns attributes and empty <g> tags from serialized SVG inner content */
   SF.cleanSvgContent = function (html) {
     var cleaned = html
-      .replace(/ xmlns="http:\/\/www\.w3\.org\/2000\/svg"/g, '')
-      .replace(/ xmlns:xlink="http:\/\/www\.w3\.org\/1999\/xlink"/g, '');
+      .replace(/ xmlns="[^"]*w3\.org\/2000\/svg"/g, '')
+      .replace(/ xmlns:xlink="[^"]*w3\.org\/1999\/xlink"/g, '');
 
     // Remove empty <g> tags (with optional whitespace inside), repeatedly to handle nested empties
     var prev;
@@ -667,7 +776,7 @@
       var defs = icon.defsContent ? '<defs>' + icon.defsContent + '</defs>' : '';
       var style = icon.styleContent ? '<style>' + icon.styleContent + '</style>' : '';
 
-      var svgStr = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' +
+      var svgStr = '<svg xmlns="' + SVG_NAMESPACE + '" viewBox="' +
         icon.originX + ' ' + icon.originY + ' ' + icon.width + ' ' + icon.height +
         '" width="' + FINGER_SIZE + '" height="' + FINGER_SIZE + '"' +
         svgAttrs + '>' + defs + style + icon.svgContent + '</svg>';
@@ -874,7 +983,7 @@
         var previewAttrs = SF.buildPreviewAttrs(icon);
         var defs = icon.defsContent ? '<defs>' + icon.defsContent + '</defs>' : '';
         var style = icon.styleContent ? '<style>' + icon.styleContent + '</style>' : '';
-        var preview = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' +
+        var preview = '<svg xmlns="' + SVG_NAMESPACE + '" viewBox="' +
           icon.originX + ' ' + icon.originY + ' ' + icon.width + ' ' + icon.height +
           '"' + previewAttrs + '>' + defs + style + icon.svgContent + '</svg>';
 

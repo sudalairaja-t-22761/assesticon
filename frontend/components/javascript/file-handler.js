@@ -210,6 +210,8 @@
 
     var pendingNew = state.icons.filter(function (i) { return !i.isExisting; });
     state.icons = icons;
+    // Icons written with an earlier prefix / suffix take the latest saved naming.
+    var renamedCount = SF.applyNamingToIcons();
     var rejected = [];
     pendingNew.forEach(function (icon) {
       var conflict = SF.iconNameConflict(icon.name);
@@ -219,7 +221,8 @@
 
     SF.renderIconList();
     $('#spriteStatus')
-      .text('Loaded ' + icons.length + ' icons from ' + state.sourceSpriteName + '.svg')
+      .text('Loaded ' + icons.length + ' icons from ' + state.sourceSpriteName + '.svg' +
+        (renamedCount ? ' — ' + renamedCount + ' renamed to the current prefix / suffix' : ''))
       .attr('class', 'upload-status success');
     $('#cssStatus').text('').attr('class', 'upload-status');
     SF.reportDuplicateIcons(rejected);
@@ -242,7 +245,7 @@
     state.sourceCssDims = dims;
     var updated = 0;
     state.icons.forEach(function (icon) {
-      var d = dims[icon.symbolId];
+      var d = dims[icon.sourceSymbolId || icon.symbolId] || dims[icon.symbolId];
       if (!d || !icon.isExisting) return;
       if (d.width !== null) { icon.width = d.width; updated++; }
       if (d.height !== null) icon.height = d.height;
