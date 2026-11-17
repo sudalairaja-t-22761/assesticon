@@ -29,8 +29,8 @@
   };
   var APPROVER_INFO = {
     none: 'Not an approver: will not be offered when requests are assigned.',
-    designer: 'Visual audit — checks the visual quality of requested icons (shape, grid, style). Gets a mail when a request is waiting for their visual audit.',
-    ui: 'UI audit — checks how the icon fits the product UI (size, usage, naming). Gets a mail after the visual audit is approved.'
+    designer: 'Visual audit — checks the visual quality of requested icons (shape, grid, style). Gets a mail and a Cliq bot message when a request is waiting for their visual audit.',
+    ui: 'UI audit — checks how the icon fits the product UI (size, usage, naming). Gets a mail and a Cliq bot message after the visual audit is approved.'
   };
   // Stage labels shown to people (the stored keys stay designer | ui).
   var AUDIT = { designer: 'Visual audit', ui: 'UI audit' };
@@ -42,7 +42,8 @@
   // Timeline action labels for stored actions like designer_approved.
   var ACTION_LABEL = { requested: 'requested (mock)', requested_master: 'requested (master)', pushed: 'pushed',
     pushed_mock: 'pushed to mock', pushed_master: 'approved + pushed to master', admin_declined: 'declined by admin',
-    npm_published: 'published to npm', npm_publish_failed: 'npm publish failed' };
+    npm_published: 'published to npm', npm_publish_failed: 'npm publish failed',
+    cliq_sent: 'Cliq message sent', cliq_failed: 'Cliq message failed', notify_failed: 'notification failed' };
   function actionLabel(action) {
     var m = /^(designer|ui)_(approved|rejected)$/.exec(action);
     return m ? STAGE[m[1]] + ' ' + m[2] : ACTION_LABEL[action] || action.replace(/_/g, ' ');
@@ -432,14 +433,14 @@
         $btn.text('Submitting ' + (done + failed.length + 1) + ' of ' + total + '…');
         return api('POST', 'requests', {
           symbolId: ic.symbolId, sprite: ic.sprite, iconName: ic.name, svg: ic.svgContent, stage: x.stage,
-          inMock: onBranch(ic, 'mock'), inMaster: onBranch(ic, 'master'),
+          inMock: onBranch(ic, 'mock'), inMaster: onBranch(ic, 'master'), drawing: uiFingerprint(ic),
           targetSprite: x.stage === 'master' && onMock ? onMock : target, note: note
         }).then(function (res) { done++; lastId = res && res.request && res.request.ROWID; }, function (e) { failed.push(ic.name + ': ' + (e && e.message || 'failed')); });
       });
     }, Promise.resolve()).then(function () {
       closeRequestDialog();
       SF.showToast(done + ' of ' + total + ' request' + (total === 1 ? '' : 's') + ' submitted' +
-        (failed.length ? ' · failed: ' + failed.slice(0, 3).join('; ') + (failed.length > 3 ? ' …' : '') : '. Approvers are mailed per request.'));
+        (failed.length ? ' · failed: ' + failed.slice(0, 3).join('; ') + (failed.length > 3 ? ' …' : '') : '. Approvers get a mail and a Cliq bot message per request.'));
       return loadStatuses().catch(function () {});
     }).then(function () {
       if (typeof SF.renderLibraryGrid === 'function') SF.renderLibraryGrid();
@@ -525,12 +526,12 @@
     var $btn = $(this).prop('disabled', true);
     api('POST', 'requests', {
       symbolId: ic.symbolId, sprite: ic.sprite, iconName: ic.name, svg: ic.svgContent, stage: stage,
-      inMock: onBranch(ic, 'mock'), inMaster: onBranch(ic, 'master'),
+      inMock: onBranch(ic, 'mock'), inMaster: onBranch(ic, 'master'), drawing: uiFingerprint(ic),
       targetSprite: $('#wfReqTarget').val(), note: $('#wfReqNote').val()
     }).then(function (res) {
       var n = res.notified || {};
       SF.showToast(n.designer
-        ? 'Request submitted — mailed ' + n.designer + ' Visual audit approver' + (n.designer === 1 ? '' : 's') + '. UI audit approvers are mailed after the visual audit is approved.' + (n.local ? ' (NOT delivered — no Catalyst credentials; see the server log)' : '') + (n.failed ? ' · ' + n.failed + ' mail(s) failed' + (n.error ? ': ' + n.error : '') : '')
+        ? 'Request submitted — mailed ' + n.designer + ' Visual audit approver' + (n.designer === 1 ? '' : 's') + '. UI audit approvers are mailed after the visual audit is approved. The Cliq bot sends the same.' + (n.cliqFailed ? ' · Cliq: ' + n.cliqFailed + ' message(s) failed' + (n.cliqError ? ': ' + n.cliqError : '') : '') + (n.local ? ' (NOT delivered — no Catalyst credentials; see the server log)' : '') + (n.failed ? ' · ' + n.failed + ' mail(s) failed' + (n.error ? ': ' + n.error : '') : '')
         : n.selfOnly ? 'Request submitted — nobody was mailed: you are the only Visual audit approver and cannot approve your own request. Add another Visual audit approver (or an admin can enable ALLOW_SELF_APPROVAL).'
         : n.failed ? 'Request submitted — mail failed: ' + (n.error || 'see the request timeline')
         : 'Request submitted — no Visual audit approvers yet, ask an admin to add them');
@@ -547,7 +548,8 @@
         '<div class="panel-body-flush"><div id="wfWaiting"></div></div></div>' +
       '<div class="panel">' +
       '<div class="panel-header"><h3 class="panel-title">Icon Requests</h3>' +
-        '<div class="panel-actions"><button class="btn btn-ghost btn-sm vf-pill hidden" id="wfMailTest" type="button" title="Send one test mail to yourself to check that approval mails can be delivered">Send test mail to me</button></div></div>' +
+        '<div class="panel-actions"><button class="btn btn-ghost btn-sm vf-pill hidden" id="wfMailTest" type="button" title="Send one test mail to yourself to check that approval mails can be delivered">Send test mail to me</button>' +
+        '<button class="btn btn-ghost btn-sm vf-pill hidden" id="wfCliqTest" type="button" title="Send one test Cliq bot message to yourself to check that approval cards can be delivered">Send test Cliq message to me</button></div></div>' +
       '<div class="vf-mailtest hidden" id="wfMailTestResult"></div>' +
       '<div class="panel-body-flush"><div id="wfRequestsList"></div><div id="wfRequestDetail"></div></div>' +
       '</div></div>';
@@ -578,7 +580,7 @@
     return api('GET', 'requests').then(function (r) {
       wf.requests = r.requests || [];
       if (r.role) wf.role = r.role;
-      $('#wfMailTest').toggleClass('hidden', wf.role !== 'admin');
+      $('#wfMailTest, #wfCliqTest').toggleClass('hidden', wf.role !== 'admin');
       renderRequestsList();
       if (wf.openId) openRequest(wf.openId);
       if (wf.role === 'admin') {
@@ -829,7 +831,7 @@
       var r = res.request;
       var actions = '';
       if (wf.role === 'admin' && r.status === 'pending') {
-        actions += '<span class="vf-msg">The Visual audit approvers were mailed; the UI audit approvers are mailed after the visual audit is approved. Optionally assign one person instead:</span>' +
+        actions += '<span class="vf-msg">The Visual audit approvers got a mail and a Cliq bot message; the UI audit approvers get theirs after the visual audit is approved. Optionally assign one person instead:</span>' +
           '<select id="wfAssignDesigner"><option value="">Any Visual audit approver</option></select>' +
           '<select id="wfAssignUI"><option value="">Any UI audit approver</option></select>' +
           '<button class="btn btn-primary btn-sm" id="wfAssignBtn" type="button">Assign</button>';
@@ -838,7 +840,7 @@
         actions += '<button class="btn btn-primary btn-sm" data-vf-review-open="' + esc(r.ROWID) + '" type="button">Review · ' + esc(AUDIT[res.canReview]) + '</button>';
       }
       if (wf.role === 'admin' && r.status === 'pending') {
-        actions += '<button class="btn btn-ghost btn-sm vf-pill" id="wfResendBtn" type="button" title="Mail the approvers of every open review again">Resend mail</button>';
+        actions += '<button class="btn btn-ghost btn-sm vf-pill" id="wfResendBtn" type="button" title="Send the mail and the Cliq bot message to the approvers of every open review again">Resend mail + Cliq</button>';
       }
       if (canDelete(r)) {
         actions += '<button class="btn btn-ghost btn-sm vf-pill" data-vf-req-del="' + esc(r.ROWID) + '" type="button" style="color:var(--danger);margin-left:auto">Delete request</button>';
@@ -890,6 +892,17 @@
       if (wf.openId === id) { wf.openId = null; $('#wfRequestDetail').empty(); }
       return Promise.all([loadRequests(), loadStatuses()]);
     }).catch(fail);
+  });
+
+  $(document).on('click', '#wfCliqTest', function () {
+    var $b = $(this).prop('disabled', true).text('Sending…'), $r = $('#wfMailTestResult').removeClass('hidden vf-mailtest-ok vf-mailtest-bad').text('Sending a test Cliq message…');
+    api('POST', 'cliq/test').then(function (res) {
+      var head = 'Bot: ' + (res.bot || '(CLIQ_BOT_NAME not set)') + ' · To: ' + res.to;
+      if (res.ok) $r.addClass('vf-mailtest-ok').html('<b>✓ Test Cliq message sent' + (res.via === 'cliq-direct' ? ' as a direct message</b> (you are not subscribed to the bot, so it came as a direct chat message).' : '.</b> Open the bot chat in Cliq.') + '<div class="vf-msg">' + esc(head) + '</div>');
+      else if (res.dev) $r.addClass('vf-mailtest-bad').html('<b>Not sent:</b> the Cliq bot is not configured on this server (CLIQ_BOT_NAME / CLIQ_BOT_TOKEN).<div class="vf-msg">' + esc(head) + '</div>');
+      else $r.addClass('vf-mailtest-bad').html('<b>✗ Cliq message failed.</b> ' + esc(res.error) + '<div class="vf-msg">' + esc(head) + '</div>');
+    }).catch(function (e) { $r.addClass('vf-mailtest-bad').text(e.message); })
+      .then(function () { $b.prop('disabled', false).text('Send test Cliq message to me'); });
   });
 
   $(document).on('click', '#wfMailTest', function () {
@@ -983,7 +996,7 @@
       var on = ' on the ' + BRANCH_LABEL[stage].toLowerCase();
       SF.showToast((alreadyThere ? 'The same icon is already' + on + (out && out.as && normId(out.as) !== normId(r.symbolId) ? ' as ' + out.as : '') + ' — recorded'
         : (replaceId ? 'Replaced ' + replaceId + ' in ' : 'Pushed to ') + file + on) +
-        (releaseExternal ? ' · the office npm publisher now bumps the version, publishes it and pushes the version (admins get a mail)'
+        (releaseExternal ? ' · the office npm publisher now bumps the version, publishes it and pushes the version (the requester and the admins get a mail and a Cliq message)'
           : pushedVersion ? (releasePending ? ' · version ' + pushedVersion + ' committed — the office npm publisher publishes it within a minute' : ' · published ' + pushedVersion) : '') +
         (releaseOff ? ' · no version bump / npm publish: the release is switched off on this server (REPO_NPM_PUBLISH)' : ''));
       resetRepoIds();

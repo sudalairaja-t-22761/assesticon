@@ -323,97 +323,117 @@ function createMasterLibraryRouter(deps) {
 
     // deps.saveGuard: extra middleware for commits (the master branch only takes admin pushes).
     const saveGuards = deps.saveGuard ? [deps.saveGuard] : [];
+    /**
+     * Commit + push files to this repository branch (and run the npm release when it is enabled here).
+     * Used by POST /save and by the server-side push of an approved request (routes/workflow.js).
+     * @param {{name:string,email:string}} user   commit author
+     * @param {Array<{name:string, content:string}>} files
+     * @param {string} [customMessage]
+     * @returns the /save answer; throws an Error with .status on a bad input or a repository failure
+     */
+    async function saveFiles(user, files, customMessage) {
+        if (!cfg.isConfigured) throw notConfigured();
+        files = Array.isArray(files) ? files : [];
+        user = user || { name: "SpriteForge user", email: "" };
+        if (!files.length) throw Object.assign(new Error("No files supplied"), { status: 400 });
+
+        const prepared = [];
+        for (const f of files) {
+            const name = path.posix.basename(String(f.name || ""));
+            const meta = byName.get(name);
+            if (!meta) throw Object.assign(new Error(`"${name}" is not a Master UI Library file. Allowed: ${[...byName.keys()].join(", ")}`), { status: 400 });
+            if (typeof f.content !== "string" || !f.content.trim()) throw Object.assign(new Error(`"${name}" has no content`), { status: 400 });
+            prepared.push({ meta, buf: Buffer.from(f.content, "utf8") });
+        }
+
+        const message = customMessage || `Update ${prepared.map((p) => p.meta.name).join(", ")} via SpriteForge (${user.name || user.email})`;
+        const writeOpts = { message, authorName: user.name || cfg.authorName, authorEmail: user.email || cfg.authorEmail };
+        let release = null;
+        const external = !!(cfg.npm && cfg.npm.enabled && cfg.npm.mode === "external");
+        if (cfg.npm && cfg.npm.enabled && !external) {
+            // Release: bump <dir>/package.json → npm publish → commit + push (the push only happens after a successful publish).
+            // Deferred mode (the cloud cannot reach the registry): bump + commit + push here; scripts/npm-publisher.js
+            // on a machine inside the office network publishes the committed version a minute later.
+            const pkgPath = path.posix.join(cfg.npm.dir, "package.json");
+            const deferred = cfg.npm.mode === "deferred";
+            writeOpts.prepare = async (read) => {
+                const buf = await read(pkgPath);
+                if (!buf) throw Object.assign(new Error(`${pkgPath} was not found on ${cfg.branch}`), { keep: true, status: 409 });
+                const text = buf.toString("utf8");
+                const taken = deferred ? null : await npmRelease.registryVersions(JSON.parse(text).name, cfg.npm);
+                release = npmRelease.bumpPackageJson(text, cfg.npm, taken);
+                return { files: [{ repoPath: pkgPath, content: Buffer.from(release.text, "utf8") }], message: `${message} [${release.to}]` };
+            };
+            if (!deferred) writeOpts.beforePush = (oid, exportDir) => npmRelease.publish(exportDir, cfg.npm, release);
+        }
+        const repoResult = await withDeadline(client.writeFiles(
+            prepared.map((p) => ({ repoPath: p.meta.repoPath, content: p.buf })),
+            writeOpts
+        ), "Commit", cfg.npm && cfg.npm.enabled ? cfg.npm.timeoutMs : undefined);
+
+        // External release: only the icon is committed; npm-publisher bumps + publishes + pushes the version.
+        if (repoResult.changed && external) {
+            repoResult.published = { name: (cache.version && cache.version.name) || null, version: null, from: cache.version && cache.version.version,
+                registry: cfg.npm.registry, tag: cfg.npm.distTag || cfg.npm.preTag, pending: true, external: true };
+        }
+        // Deferred release: the version is committed; npm-publisher publishes it (status "pending" until then).
+        if (repoResult.changed && release && cfg.npm.mode === "deferred" && !repoResult.published) {
+            repoResult.published = { name: release.name, version: release.to, from: release.from, registry: cfg.npm.registry,
+                tag: cfg.npm.distTag || cfg.npm.preTag, pending: true };
+        }
+
+        // The repository now holds exactly what was pushed — mirror it in the cache.
+        const now = new Date().toISOString();
+        for (const p of prepared) {
+            cache.files.set(p.meta.name, {
+                content: p.buf, commit: repoResult.commit || null, updatedAt: now,
+                updatedBy: user, source: "tool"
+            });
+        }
+        if (repoResult.commit) {
+            cache.commit = repoResult.commit;
+            if (repoResult.changed) cache.commitInfo = { sha: repoResult.commit, date: now, author: user.name || user.email || cfg.authorName, subject: repoResult.message };
+        }
+        if (!cache.fetchedAt) cache.fetchedAt = now;
+        if (repoResult.changed) await refreshVersion();
+        // The version just published is the branch version now, even if the re-read above failed.
+        if (repoResult.published && (!cache.version || cache.version.version !== repoResult.published.version)) {
+            cache.version = { name: repoResult.published.name, version: repoResult.published.version, file: cfg.versionFile, commit: repoResult.commit || null };
+        }
+
+        return {
+            success: true,
+            stored: prepared.map((p) => p.meta.name),
+            pushed: !!repoResult.pushed,
+            changed: !!repoResult.changed,
+            commit: repoResult.commit || null,
+            branch: cfg.branch,
+            commitMessage: repoResult.message,
+            release: repoResult.published || null,   // { name, version, from, registry, files, dryRun } when npm publish ran
+            // A branch with a package.json but the release switched off on this server: say so instead of skipping silently.
+            releaseOff: !(cfg.npm && cfg.npm.enabled) && !!cfg.versionFile,
+            pushError: null,
+            ...listing()
+        };
+    }
+
+    /** Text of one configured file at the branch tip (fresh: true re-reads the repository first). */
+    async function readText(name, fresh) {
+        if (!byName.has(name)) throw Object.assign(new Error(`Unknown file ${name}. Allowed: ${[...byName.keys()].join(", ")}`), { status: 400 });
+        await ensureLoaded(!!fresh);
+        const entry = cache.files.get(name);
+        return entry ? entry.content.toString("utf8") : null;
+    }
+    router.repo = { saveFiles, readText, branch: cfg.branch, files: cfg.files.map((f) => f.name), canCommit: (user) => repoConfig.canCommit(cfg, user) };
+
     router.post("/save", gate, ...saveGuards, async (req, res) => {
         try {
-            if (!cfg.isConfigured) throw notConfigured();
             const access = commitAccess(req);
             if (!access.canCommit) {
                 console.warn(`[master-library] commit refused for ${access.commitUser || "unknown user"}`);
                 return res.status(403).json({ success: false, restricted: true, message: access.commitRestrictedReason, ...access });
             }
-            const body  = req.body || {};
-            const files = Array.isArray(body.files) ? body.files : [];
-            if (!files.length) return res.status(400).json({ success: false, message: "No files supplied" });
-
-            const prepared = [];
-            for (const f of files) {
-                const name = path.posix.basename(String(f.name || ""));
-                const meta = byName.get(name);
-                if (!meta) return res.status(400).json({ success: false, message: `"${name}" is not a Master UI Library file. Allowed: ${[...byName.keys()].join(", ")}` });
-                if (typeof f.content !== "string" || !f.content.trim()) return res.status(400).json({ success: false, message: `"${name}" has no content` });
-                prepared.push({ meta, buf: Buffer.from(f.content, "utf8") });
-            }
-
-            const user = userOf(req) || { name: "SpriteForge user", email: "" };
-            const message = body.message || `Update ${prepared.map((p) => p.meta.name).join(", ")} via SpriteForge (${user.name || user.email})`;
-            const writeOpts = { message, authorName: user.name || cfg.authorName, authorEmail: user.email || cfg.authorEmail };
-            let release = null;
-            const external = !!(cfg.npm && cfg.npm.enabled && cfg.npm.mode === "external");
-            if (cfg.npm && cfg.npm.enabled && !external) {
-                // Release: bump <dir>/package.json → npm publish → commit + push (the push only happens after a successful publish).
-                // Deferred mode (the cloud cannot reach the registry): bump + commit + push here; scripts/npm-publisher.js
-                // on a machine inside the office network publishes the committed version a minute later.
-                const pkgPath = path.posix.join(cfg.npm.dir, "package.json");
-                const deferred = cfg.npm.mode === "deferred";
-                writeOpts.prepare = async (read) => {
-                    const buf = await read(pkgPath);
-                    if (!buf) throw Object.assign(new Error(`${pkgPath} was not found on ${cfg.branch}`), { keep: true, status: 409 });
-                    const text = buf.toString("utf8");
-                    const taken = deferred ? null : await npmRelease.registryVersions(JSON.parse(text).name, cfg.npm);
-                    release = npmRelease.bumpPackageJson(text, cfg.npm, taken);
-                    return { files: [{ repoPath: pkgPath, content: Buffer.from(release.text, "utf8") }], message: `${message} [${release.to}]` };
-                };
-                if (!deferred) writeOpts.beforePush = (oid, exportDir) => npmRelease.publish(exportDir, cfg.npm, release);
-            }
-            const repoResult = await withDeadline(client.writeFiles(
-                prepared.map((p) => ({ repoPath: p.meta.repoPath, content: p.buf })),
-                writeOpts
-            ), "Commit", cfg.npm && cfg.npm.enabled ? cfg.npm.timeoutMs : undefined);
-
-            // External release: only the icon is committed; npm-publisher bumps + publishes + pushes the version.
-            if (repoResult.changed && external) {
-                repoResult.published = { name: (cache.version && cache.version.name) || null, version: null, from: cache.version && cache.version.version,
-                    registry: cfg.npm.registry, tag: cfg.npm.distTag || cfg.npm.preTag, pending: true, external: true };
-            }
-            // Deferred release: the version is committed; npm-publisher publishes it (status "pending" until then).
-            if (repoResult.changed && release && cfg.npm.mode === "deferred" && !repoResult.published) {
-                repoResult.published = { name: release.name, version: release.to, from: release.from, registry: cfg.npm.registry,
-                    tag: cfg.npm.distTag || cfg.npm.preTag, pending: true };
-            }
-
-            // The repository now holds exactly what was pushed — mirror it in the cache.
-            const now = new Date().toISOString();
-            for (const p of prepared) {
-                cache.files.set(p.meta.name, {
-                    content: p.buf, commit: repoResult.commit || null, updatedAt: now,
-                    updatedBy: user, source: "tool"
-                });
-            }
-            if (repoResult.commit) {
-                cache.commit = repoResult.commit;
-                if (repoResult.changed) cache.commitInfo = { sha: repoResult.commit, date: now, author: user.name || user.email || cfg.authorName, subject: repoResult.message };
-            }
-            if (!cache.fetchedAt) cache.fetchedAt = now;
-            if (repoResult.changed) await refreshVersion();
-            // The version just published is the branch version now, even if the re-read above failed.
-            if (repoResult.published && (!cache.version || cache.version.version !== repoResult.published.version)) {
-                cache.version = { name: repoResult.published.name, version: repoResult.published.version, file: cfg.versionFile, commit: repoResult.commit || null };
-            }
-
-            res.json({
-                success: true,
-                stored: prepared.map((p) => p.meta.name),
-                pushed: !!repoResult.pushed,
-                changed: !!repoResult.changed,
-                commit: repoResult.commit || null,
-                branch: cfg.branch,
-                commitMessage: repoResult.message,
-                release: repoResult.published || null,   // { name, version, from, registry, files, dryRun } when npm publish ran
-                // A branch with a package.json but the release switched off on this server: say so instead of skipping silently.
-                releaseOff: !(cfg.npm && cfg.npm.enabled) && !!cfg.versionFile,
-                pushError: null,
-                ...listing()
-            });
+            res.json(await saveFiles(userOf(req), (req.body || {}).files, (req.body || {}).message));
         } catch (err) {
             console.error("[" + tag + "] save:", err.message);
             res.status(err.status || 502).json({ success: false, message: err.message, pushError: err.message });

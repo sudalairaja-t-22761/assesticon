@@ -132,4 +132,36 @@ function releaseMail(r) {
     return { subject, html, text };
 }
 
-module.exports = { sendMail, approvalMail, releaseMail };
+/**
+ * A status update for the requester or an admin (request sent, audit approved / rejected, ready to push, pushed,
+ * declined). info: { title, line, note?, by?, tone?: "ok" | "bad" | "" }; the Cliq bot sends the same text.
+ */
+function statusMail(req, { request, info }) {
+    const link = requestLink(req, request);
+    const target = request.targetSprite === "svg_cssicons" ? "cssicon (svg_cssicons.svg)" : "utilicon (crmutil_icons.svg)";
+    const branch = request.stage === "master" ? "Master branch" : "Mock branch";
+    const by = request.requestedByName || request.requestedBy;
+    const plain = String(info.line || "").replace(/\*/g, "");
+    const color = info.tone === "bad" ? "#E3204F" : info.tone === "ok" ? "#12AA67" : "#2C83EC";
+    const subject = `${info.title}: icon "${request.iconName}" (${branch.toLowerCase()})`;
+    const row = (k, v) => `<tr><td style="padding:6px 16px 6px 0;color:#6b7280;font-size:13px;white-space:nowrap">${k}</td><td style="padding:6px 0;font-size:14px;color:#111827">${v}</td></tr>`;
+    const html =
+        `<div style="background:#f3f4f6;padding:24px 12px;font-family:Segoe UI,Arial,sans-serif">` +
+        `<table role="presentation" align="center" width="100%" style="max-width:560px;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e5e7eb">` +
+        `<tr><td style="background:${color};padding:18px 24px;color:#ffffff;font-size:16px;font-weight:600">${esc(info.title)}</td></tr>` +
+        `<tr><td style="padding:24px">` +
+        `<p style="margin:0 0 18px;font-size:15px;color:#111827">${esc(plain)}</p>` +
+        `<table role="presentation" style="border-collapse:collapse;margin-bottom:22px">` +
+        row("Icon", esc(request.iconName)) + row("Requested by", esc(by)) + row("Move to", esc(branch + " · " + target)) +
+        (info.by ? row("By", esc(info.by)) : "") + (info.note ? row("Note", esc(info.note)) : "") +
+        `</table>` +
+        (link ? `<a href="${esc(link)}" style="display:inline-block;background:#2C83EC;color:#ffffff;text-decoration:none;padding:11px 22px;border-radius:6px;font-size:14px;font-weight:600">Open the request</a>` : "") +
+        `</td></tr>` +
+        `<tr><td style="padding:14px 24px;background:#f9fafb;color:#9ca3af;font-size:12px">Icon Assets tool — icon verification. The Cliq bot sends the same update.</td></tr>` +
+        `</table></div>`;
+    const text = `${plain}\n\nIcon: ${request.iconName}\nRequested by: ${by}\nMove to: ${branch} · ${target}\n` +
+        (info.by ? `By: ${info.by}\n` : "") + (info.note ? `Note: ${info.note}\n` : "") + (link ? `\nOpen the request: ${link}\n` : "");
+    return { subject, html, text };
+}
+
+module.exports = { sendMail, approvalMail, releaseMail, statusMail, requestLink };

@@ -1,0 +1,54 @@
+// Cliq FUNCTION of type "Form" — name it exactly:  iconactionform
+// Runs when the form opened by "iconaction" is submitted. It sends the action to the Icon Assets server, which
+// checks the person's role (the same rules as in the app) and answers with the text shown here.
+//
+// Handler arguments given by Cliq: form, user, chat, target
+//
+// SET THESE TWO VALUES:
+apiUrl = "https://YOUR-CATALYST-DOMAIN/server/spriteForgeJoin/api/cliq/action";
+actionToken = "PASTE-THE-SAME-VALUE-AS-CLIQ_ACTION_TOKEN";
+
+values = form.get("values");
+key = values.get("key").toString();
+parts = key.toList(":");
+note = "";
+if(values.get("note") != null)
+{
+	note = values.get("note").toString();
+}
+
+body = Map();
+body.put("action",parts.get(0));
+body.put("requestId",parts.get(1));
+body.put("email",user.get("email"));
+body.put("name",user.get("first_name") + " " + user.get("last_name"));
+body.put("note",note);
+
+headers = Map();
+headers.put("x-cliq-token",actionToken);
+headers.put("Content-Type","application/json");
+
+answer = invokeurl
+[
+	url :apiUrl
+	type :POST
+	parameters:body.toString()
+	headers:headers
+];
+
+text = "The Icon Assets server did not answer. Open the request in the app and try there.";
+if(answer != null && answer.get("message") != null)
+{
+	text = answer.get("message").toString();
+	if(answer.get("ok") == true)
+	{
+		text = "✅ " + text;
+	}
+	else
+	{
+		text = "⚠️ " + text;
+	}
+}
+reply = Map();
+reply.put("text",text);
+return reply;

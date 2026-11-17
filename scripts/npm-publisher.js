@@ -89,7 +89,9 @@ async function workCopy(branch) {
             "--single-branch", "--branch", branch, GIT_URL, dir]);
         await git(dir, ["sparse-checkout", "set", NPM_DIR]);
     }
-    await git(dir, ["fetch", "-q", "--depth", "50", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+    // A plain incremental fetch: the repository server stalls on a "--depth 50" fetch of an existing working copy
+    // (no answer until the 5 minute timeout), while this one only asks for the commits after what is already here.
+    await git(dir, ["fetch", "-q", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
     await git(dir, ["checkout", "-q", "-B", branch, `origin/${branch}`]);
     await git(dir, ["reset", "-q", "--hard", `origin/${branch}`]);
     return dir;
@@ -171,7 +173,7 @@ async function pushVersion(dir, b, version, subjects) {
         } catch (e) {
             if (attempt >= 3) throw new Error(`${version} is published, but pushing the version failed: ${e.message}`);
             log(`${b.branch}: push rejected (branch moved?) — retrying on the new tip`);
-            await git(dir, ["fetch", "-q", "--depth", "50", "origin", `+refs/heads/${b.branch}:refs/remotes/origin/${b.branch}`]);
+            await git(dir, ["fetch", "-q", "origin", `+refs/heads/${b.branch}:refs/remotes/origin/${b.branch}`]);
             await git(dir, ["reset", "-q", "--hard", `origin/${b.branch}`]);
             setVersion(path.join(dir, PKG), version);
         }

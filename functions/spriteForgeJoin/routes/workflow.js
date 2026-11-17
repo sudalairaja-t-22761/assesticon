@@ -38,22 +38,35 @@
  *   DELETE /api/requests/:id            → admin: any request; requester: own pending/rejected request
  *   POST   /api/requests/:id/push       → { commitSha? }  record the push   [admin]
  *   POST   /api/requests/:id/decline    → { note }  admin turns down an audited master request         [admin]
+ *   POST   /api/cliq/test               → send a test Cliq bot message to the signed-in admin              [admin]
+ *   POST   /api/cliq/action             → { action: approve|reject|push|decline, requestId, email, name?, note? }
+ *                                         called by the Cliq bot's button / form functions (cliq/*.dg); no session:
+ *                                         header x-cliq-token = CLIQ_ACTION_TOKEN. Answers { ok, message } for the bot.
+ *                                         "push" does the whole push on the server (sprite edit + commit + record).
+ *   GET    /api/cliq/preview/:id.png    → PNG of a request's icon for the bot card; ?sig= is an HMAC of the id
+ *
+ * Notifications: every step is sent by mail AND by the Cliq bot (lib/mailer.js + lib/cliq.js) —
+ *   approvers get "waiting for your approval" (Cliq: card with Approve / Reject + a note form),
+ *   the requester gets every status change, admins get every status change, and once both audits passed
+ *   only admins get the push card (Push to mock / Approve & push to master + Decline).
  *
  * Flow (UI library = Iconassest, mock = REPO_BRANCH, master = MASTER_REPO_BRANCH):
  *   unverified ─request─▶ requested ─Visual + UI audit─▶ admin pushes to mock ─▶ mock_verified
  *   mock_verified ─request─▶ master_requested ─Visual + UI audit─▶ admin approves + pushes to master ─▶ master_verified
  * A rejection (or a deleted request) puts the icon back where that stage started (unverified / mock_verified).
- * The sprite write itself is done by the client through /api/master-library/save (mock) or
- * /api/master-branch/save (master, admin only); /push records it.
+ * In the app the sprite write is done by the client through /api/master-library/save (mock) or
+ * /api/master-branch/save (master, admin only) and /push records it; from the Cliq bot the server does both.
  */
 
 const express = require("express");
 const store = require("../lib/store");
 const orgUsers = require("../lib/org-users");
-const { sendMail, approvalMail, releaseMail } = require("../lib/mailer");
+const { sendMail, approvalMail, releaseMail, statusMail } = require("../lib/mailer");
+const cliq = require("../lib/cliq");
+const merge = require("../lib/sprite-merge");
 const crypto = require("crypto");
 const zlib = require("zlib");
-const { MENUS, MENU_KEYS, loadRoles, syncRoleRows, setRoleMenu, setRoleMenus, createRole, renameRole, deleteRole, getAccess, requireRole, norm, slug, menuList, isExpired, approverOf, BUILTIN } = require("../lib/roles");
+const { MENUS, MENU_KEYS, loadRoles, syncRoleRows, setRoleMenu, setRoleMenus, createRole, renameRole, deleteRole, getAccess, getRole, requireRole, norm, slug, menuList, isExpired, approverOf, BUILTIN } = require("../lib/roles");
 
 // ALLOW_SELF_APPROVAL=true lets a requester who is also an approver review (and be mailed about) their own request.
 // Off by default: verification means a second person looks at it. Turn it on for very small teams or for testing.
@@ -90,17 +103,20 @@ function parseApprover(v) {
     return ["none", "designer", "ui"].includes(a) ? a : null;
 }
 
-function createWorkflowRouter({ requireSession }) {
+function createWorkflowRouter({ requireSession, repos }) {
     const router = express.Router();
     // Mounted at /api, so gate only our own paths (other /api routes stay as they were).
     router.use(["/me", "/user-settings", "/users", "/share-users", "/org-users", "/members", "/roles", "/mail", "/icon-status", "/icon-categories", "/requests", "/activity-log"], requireSession);
 
     const me = (req) => req.auth.session.user;
+    // Who is acting: the signed-in user of a session route, or the { email, name, role } the Cliq bot sent.
+    const actorOf = (x) => (x && x.auth ? { email: me(x).email || "", name: me(x).name || "", role: x.role || "" } : (x || { email: "" }));
+    const fail = (status, message) => Object.assign(new Error(message), { status });
 
-    async function logEvent(db, requestId, req, action, note) {
+    async function logEvent(db, requestId, who, action, note) {
         await db.insert("request_events", {
             requestId: String(requestId),
-            actor: me(req).email || "",
+            actor: actorOf(who).email || "",
             action,
             note: str(note, 500)
         });
@@ -124,21 +140,116 @@ function createWorkflowRouter({ requireSession }) {
     // Pushing an audited icon (mock or master) is admin only. req.role is set by requireRole.
     const canPush = (req) => req.role === "admin";
 
-    // Mail every active approver of `type` (except the requester); returns { sent[], failed[] }.
-    async function mailApprovers(req, db, request, type, members) {
-        const pool = members.filter((m) => !isExpired(m) && approverOf(m) === type && !isOwnRequest(request, m.userEmail));
+    // One person, both channels. mail: { subject, html, text } | null, card: a lib/cliq.js message | null.
+    async function tell(req, to, mail, card) {
+        const [m, c] = await Promise.all([
+            mail ? sendMail(req, { to, subject: mail.subject, html: mail.html, text: mail.text }) : null,
+            card ? cliq.sendCliq(req, { to, ...card }) : null
+        ]);
+        return { to, mail: m, cliq: c };
+    }
+    // { sent[], failed[] } of one channel ("mail" | "cliq") from tell() results.
+    function channel(results, key) {
         const sent = [], failed = [];
-        for (const m of pool) {
+        for (const r of results) {
+            const out = r[key];
+            if (out) (out.ok ? sent : failed).push({ to: r.to, dev: !!out.dev, error: out.error, via: out.via });
+        }
+        return { sent, failed };
+    }
+    const listFailed = (failed) => failed.map((x) => x.to + " (" + x.error + ")").join(", ");
+
+    // Mail + Cliq card to every active approver of `type` (except the requester): "waiting for your approval".
+    // Returns the mail result as before ({ pool, sent[], failed[] }) plus cliq: { sent[], failed[] }.
+    async function mailApprovers(req, db, request, type, members, who) {
+        const pool = members.filter((m) => !isExpired(m) && approverOf(m) === type && !isOwnRequest(request, m.userEmail));
+        const results = await Promise.all(pool.map((m) => {
             const msg = approvalMail(req, { role: type, request });
-            const out = await sendMail(req, { to: m.userEmail, subject: msg.subject, html: msg.html, text: msg.text });
-            (out.ok ? sent : failed).push({ to: m.userEmail, dev: !!out.dev, error: out.error });
-        }
+            return tell(req, m.userEmail, msg, cliq.approvalCard(req, { role: type, request }));
+        }));
+        const { sent, failed } = channel(results, "mail"), bot = channel(results, "cliq");
+        const label = type === "ui" ? "UI audit" : "Visual audit";
         if (sent.length || failed.length) {
-            await logEvent(db, request.ROWID, req, failed.length && !sent.length ? "mail_failed" : "mail_sent",
-                `${type === "ui" ? "UI audit" : "Visual audit"} approvers notified (${sent.length}${sent.some((x) => x.dev) ? ", logged in local run" : ""}): ${sent.map((x) => x.to).join(", ")}` +
-                (failed.length ? `; failed: ${failed.map((x) => x.to + " (" + x.error + ")").join(", ")}` : ""));
+            await logEvent(db, request.ROWID, who || req, failed.length && !sent.length ? "mail_failed" : "mail_sent",
+                `${label} approvers notified (${sent.length}${sent.some((x) => x.dev) ? ", logged in local run" : ""}): ${sent.map((x) => x.to).join(", ")}` +
+                (failed.length ? `; failed: ${listFailed(failed)}` : ""));
         }
-        return { pool, sent, failed };
+        if (bot.sent.length || bot.failed.length) {
+            await logEvent(db, request.ROWID, who || req, bot.failed.length && !bot.sent.length ? "cliq_failed" : "cliq_sent",
+                `${label} approvers got the Cliq card (${bot.sent.length}${bot.sent.some((x) => x.dev) ? ", logged only: the bot is not configured" : ""}): ${bot.sent.map((x) => x.to + (x.via === "cliq-direct" ? " (direct message: not subscribed to the bot)" : "")).join(", ")}` +
+                (bot.failed.length ? `; failed: ${listFailed(bot.failed)}` : ""));
+        }
+        return { pool, sent, failed, cliq: bot };
+    }
+
+    // Every admin: ADMIN_EMAILS + members with the Admin role whose access has not expired.
+    const adminEmails = (members) => [...new Set(String(process.env.ADMIN_EMAILS || "").split(",").map(norm)
+        .concat(members.filter((m) => m.memberType === "admin" && !isExpired(m)).map((m) => norm(m.userEmail))).filter(Boolean))];
+
+    // The text of one status update, for the requester (you: true) or an admin. Used by the mail and the Cliq card.
+    function statusInfo(event, r, o, you) {
+        const icon = `*${r.iconName || r.symbolId}*`, branch = stageOf(r) === "master" ? "master branch" : "mock branch";
+        const who = you ? "Your request for the icon " + icon : `The request of ${r.requestedByName || r.requestedBy} for the icon ${icon}`;
+        const by = (o.actor && (o.actor.name || o.actor.email)) || "";
+        const base = { by, note: str(o.note, 500), tone: "" };
+        switch (event) {
+            case "requested": return { ...base, by: "", note: "", title: you ? "Request sent to Visual audit" : "New icon request",
+                line: `${who} (${branch}) was sent to the Visual audit approvers. The UI audit follows after the Visual audit approves.` };
+            case "designer_approved": return { ...base, tone: "ok", title: "Visual audit approved",
+                line: `${who} passed the Visual audit. It moved to the UI audit.` };
+            case "designer_rejected": return { ...base, tone: "bad", title: "Visual audit rejected",
+                line: `${who} was rejected in the Visual audit. The request is closed; a new request can be raised after the icon is fixed.` };
+            case "ui_rejected": return { ...base, tone: "bad", title: "UI audit rejected",
+                line: `${who} was rejected in the UI audit. The request is closed; a new request can be raised after the icon is fixed.` };
+            case "ready": return { ...base, tone: "ok", title: you ? "Both audits approved" : `Ready to push to ${stageOf(r) === "master" ? "master" : "mock"}`,
+                line: you ? `${who} passed the Visual audit and the UI audit. It is waiting for an admin to push it to the ${branch}.`
+                    : `${who} passed both audits. It is waiting for an admin to push it to the ${branch}.` };
+            case "pushed": return { ...base, tone: "ok", title: `Pushed to ${branch}`,
+                line: o.alreadyThere ? `${who}: the same icon is already on the ${branch}, so the request is recorded as pushed.`
+                    : `${who} was pushed to the ${branch}. The npm version follows as soon as it is published.` };
+            case "declined": return { ...base, tone: "bad", title: "Master push declined",
+                line: `${who} was declined by an admin. The icon stays mock verified.` };
+            default: return { ...base, title: "Icon request update", line: `${who}: ${event}.` };
+        }
+    }
+
+    /**
+     * Tell the requester and every admin about a status change, by mail and by the Cliq bot.
+     * event: requested | designer_approved | designer_rejected | ui_rejected | ready | pushed | declined
+     * o: { actor: { email, name }, note?, members?, skip?: emails already told (the approvers of this step), alreadyThere? }
+     * The person who acted is not told about their own action. "ready" is the exception: every admin gets the push
+     * card (Push / Decline), also the one who gave the last approval. A problem here never blocks the workflow.
+     */
+    async function notify(req, db, event, request, o) {
+        try {
+            const members = o.members || await db.all("members");
+            const actor = norm(o.actor && o.actor.email), requester = norm(request.requestedBy);
+            const skip = new Set((o.skip || []).map(norm));
+            const admins = adminEmails(members);
+            const jobs = [];
+            const status = (to, you) => {
+                const info = statusInfo(event, request, o, you);
+                return tell(req, to, statusMail(req, { request, info }), cliq.statusCard(req, { request, info }));
+            };
+            if (event === "ready") {
+                for (const a of admins) {
+                    const info = statusInfo(event, request, o, false);
+                    jobs.push(tell(req, a, statusMail(req, { request, info }), cliq.pushCard(req, { request })));
+                }
+                if (requester && requester !== actor && !admins.includes(requester)) jobs.push(status(requester, true));
+            } else {
+                if (requester && requester !== actor && !skip.has(requester)) jobs.push(status(requester, true));
+                for (const a of admins) if (a !== actor && a !== requester && !skip.has(a)) jobs.push(status(a, false));
+            }
+            const results = await Promise.all(jobs);
+            const failed = channel(results, "mail").failed.map((x) => "mail to " + x.to + " (" + x.error + ")")
+                .concat(channel(results, "cliq").failed.map((x) => "Cliq to " + x.to + " (" + x.error + ")"));
+            if (failed.length) await logEvent(db, request.ROWID, o.actor, "notify_failed", `${event}: ${failed.join("; ")}`.slice(0, 500));
+            return results;
+        } catch (err) {
+            console.error("[workflow] notify", event, err.message);
+            return [];
+        }
     }
 
     // "sent" | "partial" | "failed" | "logged" (local run without credentials) | "" (nobody to mail)
@@ -151,10 +262,10 @@ function createWorkflowRouter({ requireSession }) {
 
     // drawing: fingerprint of the UI library drawing that was pushed ("" for any other change), so the Library
     // can tell a pushed icon from one whose drawing changed in the UI library afterwards.
-    async function setIconStatus(db, symbolId, sprite, status, req, drawing) {
+    async function setIconStatus(db, symbolId, sprite, status, who, drawing) {
         const rows = await db.all("icon_status");
         const row = rows.find((r) => r.symbolId === symbolId && r.sprite === sprite);
-        const fields = { symbolId, sprite, status, drawing: str(drawing, 80), updatedBy: me(req).email || "" };
+        const fields = { symbolId, sprite, status, drawing: str(drawing, 80), updatedBy: actorOf(who).email || "" };
         if (row) await db.update("icon_status", row.ROWID, fields);
         else await db.insert("icon_status", fields);
     }
@@ -163,9 +274,177 @@ function createWorkflowRouter({ requireSession }) {
         try { await fn(req, res); }
         catch (err) {
             console.error("[workflow]", req.method, req.path, err.message);
-            res.status(500).json({ success: false, message: err.message || "Request failed" });
+            res.status(err.status || 500).json({ success: false, message: err.message || "Request failed" });
         }
     };
+
+    // ── the workflow actions (shared by the session routes and the Cliq bot) ───
+    // Each takes the acting person as actor = { email, name, role } and throws fail(status, message) when a rule says no.
+    const findRequest = async (db, id) => {
+        const r = (await db.all("icon_requests")).find((x) => String(x.ROWID) === String(id));
+        if (!r) throw fail(404, "Request not found");
+        return r;
+    };
+
+    /** Approve / reject one audit. Returns { request, slot, uiMail }. */
+    async function reviewRequest(req, db, actor, id, decision, note) {
+        const r = await findRequest(db, id);
+        if (r.status !== "pending") throw fail(409, "Request is no longer pending" + (r.status === "rejected" ? " (it was rejected)" : r.status === "approved" ? " (both audits are approved)" : ""));
+        if (!["approve", "reject"].includes(decision)) throw fail(400, "decision must be approve or reject");
+        if (decision === "reject" && !str(note).trim()) throw fail(400, "A note is required to reject: say what has to change");
+
+        const members = await db.all("members");
+        const slot = reviewSlot(members, norm(actor.email), r, actor.role === "admin");
+        if (!slot) {
+            const mine = members.find((x) => norm(x.userEmail) === norm(actor.email));
+            throw fail(403, mine && approverOf(mine) === "ui" && r.designerDecision !== "approved"
+                ? "The UI audit starts after the Visual audit is approved" : "You are not an approver for this request");
+        }
+        const decided = slotDecision(r, slot);
+        if (decided) {
+            const by = slot === "designer" ? r.designerBy : r.uiBy;
+            throw fail(409, `The ${slot === "ui" ? "UI" : "Visual"} audit is already ${decided}${by ? " by " + by : ""}`);
+        }
+        const asDesigner = slot === "designer", asUI = slot === "ui";
+
+        const value = decision === "approve" ? "approved" : "rejected";
+        const fields = {};
+        if (asDesigner) Object.assign(fields, { designerDecision: value, designerBy: actor.email || "" });
+        if (asUI) Object.assign(fields, { uiDecision: value, uiBy: actor.email || "" });
+        const merged = { ...r, ...fields };
+        if (value === "rejected") fields.status = "rejected";
+        else if (merged.designerDecision === "approved" && merged.uiDecision === "approved") fields.status = "approved";
+
+        const saved = await db.update("icon_requests", r.ROWID, fields);
+        await logEvent(db, r.ROWID, actor, `${slot}_${value}`, note);
+        const now = { ...r, ...fields };
+
+        // Step 2: the Visual audit approved, so now the UI audit approvers are notified (or the one assigned to the UI review).
+        let uiMail = null, told = [];
+        if (asDesigner && value === "approved" && fields.status !== "approved") {
+            const scope = r.assignedUI ? members.filter((m) => norm(m.userEmail) === norm(r.assignedUI)) : members;
+            const out = await mailApprovers(req, db, now, "ui", scope, actor);
+            uiMail = { sent: out.sent.length, failed: out.failed.length, local: out.sent.some((x) => x.dev), error: (out.failed[0] || {}).error || "", pool: out.pool.length,
+                cliq: out.cliq.sent.filter((x) => !x.dev).length, cliqFailed: out.cliq.failed.length };
+            told = out.pool.map((x) => x.userEmail);
+            await db.update("icon_requests", r.ROWID, { notifiedUI: told.join(","), mailStatus: mailState([out]) });
+        }
+        // Both audits passed: the icon keeps its requested status until an admin pushes it.
+        if (fields.status === "rejected") await setIconStatus(db, r.symbolId, r.sprite, startStatus(r), actor);
+        // The requester and the admins follow every step; once both audits passed only the admins get the push card.
+        await notify(req, db, fields.status === "approved" ? "ready" : `${slot}_${value}`, now, { actor, note, members, skip: told });
+        return { request: saved || now, slot, uiMail };
+    }
+
+    /** Record that an approved request was pushed (the sprite is already committed). Returns the saved request. */
+    async function recordPush(req, db, actor, id, o) {
+        const r = await findRequest(db, id);
+        if (r.status === "pushed") throw fail(409, "Already pushed" + (r.pushedBy ? " by " + r.pushedBy : ""));
+        if (r.status !== "approved") throw fail(409, "Both the Visual audit and the UI audit must approve before pushing");
+        const master = stageOf(r) === "master";
+        // Pushing an audited icon (mock or master) is admin only.
+        if (actor.role !== "admin") throw fail(403, master ? "Only an admin can approve and push to the master branch" : "Only an admin can push this icon to the mock branch");
+        const saved = await db.update("icon_requests", r.ROWID, { status: "pushed", pushCommitSha: str(o.commitSha, 80), pushedBy: actor.email || "", pushedAt: new Date().toISOString(),
+            releaseStatus: "", releaseVersion: "", releaseError: "" });
+        await setIconStatus(db, r.symbolId, r.sprite, master ? "master_verified" : "mock_verified", actor, o.drawing);
+        await logEvent(db, r.ROWID, actor, master ? "pushed_master" : "pushed_mock",
+            `to ${r.targetSprite}${o.version ? " · published " + str(o.version, 60) : ""}${o.alreadyThere ? " (already in the sprite)" : ""}${o.via ? " · " + o.via : ""}`);
+        await notify(req, db, "pushed", { ...r, status: "pushed" }, { actor, alreadyThere: !!o.alreadyThere });
+        return saved;
+    }
+
+    /** Admin turns down a master request after both audits passed. Returns the saved request. */
+    async function declineRequest(req, db, actor, id, note) {
+        const r = await findRequest(db, id);
+        if (actor.role !== "admin") throw fail(403, "Only an admin can decline a master push");
+        if (stageOf(r) !== "master" || r.status !== "approved") throw fail(409, "Only an audited master request can be declined");
+        const saved = await db.update("icon_requests", r.ROWID, { status: "rejected" });
+        await setIconStatus(db, r.symbolId, r.sprite, startStatus(r), actor);
+        await logEvent(db, r.ROWID, actor, "admin_declined", note);
+        await notify(req, db, "declined", { ...r, status: "rejected" }, { actor, note });
+        return saved || { ...r, status: "rejected" };
+    }
+
+    /**
+     * The whole push on the server (the Cliq bot's Push button): the same decisions as the app's Push button —
+     * the same drawing is already on the branch → only record it; the same name with another drawing → replace that
+     * icon in its sprite; otherwise add the icon to the request's sprite — then commit + push and record it.
+     * Returns { request, message }.
+     */
+    const pushing = new Set(); // requests whose push is running in this instance (a double click must not commit twice)
+    async function pushRequest(req, db, actor, id) {
+        const r = await findRequest(db, id);
+        const stage = stageOf(r), master = stage === "master", C = merge.compare;
+        if (r.status === "pushed") throw fail(409, "Already pushed" + (r.pushedBy ? " by " + r.pushedBy : ""));
+        if (r.status !== "approved") throw fail(409, "Both the Visual audit and the UI audit must approve before pushing");
+        if (actor.role !== "admin") throw fail(403, master ? "Only an admin can approve and push to the master branch" : "Only an admin can push this icon to the mock branch");
+        const repo = repos && repos[stage];
+        if (!repo) throw fail(503, "The server-side push is not set up on this server");
+        const author = { name: actor.name || actor.email, email: actor.email };
+        if (!repo.canCommit(author)) throw fail(403, `${actor.email} does not have commit access to ${repo.branch} (REPO_COMMIT_USERS)`);
+        if (pushing.has(String(r.ROWID))) throw fail(409, "A push of this request is already running");
+        pushing.add(String(r.ROWID));
+        try {
+            // Fresh sprites of the branch (the first read re-reads the repository) + the UI library drawing of this icon.
+            const texts = [];
+            for (const f of TARGET_SPRITES) {
+                const text = await repo.readText(f + ".svg", !texts.length).catch((e) => { console.warn("[push] read", f, e.message); return null; });
+                texts.push(text ? { sprite: f, text } : null);
+            }
+            if (!texts.some(Boolean)) throw fail(502, `The sprites of ${repo.branch} could not be read — try again in a minute`);
+            let uiKey = "", uiRead = false;
+            for (const name of (repos.ui && repos.ui.files) || []) {
+                if (!/\.svg$/i.test(name)) continue;
+                const t = await repos.ui.readText(name).catch(() => null);
+                if (!t) continue;
+                uiRead = true;
+                uiKey = C.spriteIcons(t)[C.normId(r.symbolId)] || uiKey;
+            }
+            if (!uiRead) throw fail(502, "The UI library sprite could not be read, so the icon cannot be compared with the branch — try again in a minute");
+
+            const branch = C.branchIndex(texts.filter(Boolean)), nid = C.normId(r.symbolId);
+            const m = C.match(r.symbolId, uiKey, branch);
+            let file = r.targetSprite + ".svg", replaceId = "", alreadyThere = m === "same" || m === "alias", out = null;
+            if (!alreadyThere) {
+                if (m === "changed") { replaceId = branch.realId[nid]; file = (branch.sprite[nid] || r.targetSprite) + ".svg"; }
+                const sprite = texts.find((t) => t && t.sprite + ".svg" === file);
+                if (!sprite) throw fail(502, `${file} could not be read from ${repo.branch}`);
+                const item = { name: merge.cleanIconName(r.iconName), text: readSvg(r) };
+                let svg = "";
+                if (replaceId) {
+                    const res = merge.replaceIconInSprite(sprite.text, replaceId, item);
+                    if (res.error) throw fail(422, "Could not replace icon: " + res.error);
+                    svg = res.svg;
+                } else {
+                    const res = merge.appendIconsToSprite(sprite.text, [item]);
+                    if (res.added.length) svg = res.svg;
+                    else {
+                        const why = res.skipped.length ? res.skipped[0].reason : "nothing to add";
+                        if (why !== "already in the sprite") throw fail(422, "Could not add icon: " + why);
+                        alreadyThere = true;
+                    }
+                }
+                if (svg) {
+                    out = await repo.saveFiles(author, [{ name: file, content: svg }],
+                        `${replaceId ? "Update " + replaceId + " in " : "Add " + r.iconName + " to "}${file} (${stage} verified) via SpriteForge`);
+                    if (!out || out.success === false || out.pushError) throw fail(502, (out && (out.pushError || out.message)) || "Push failed");
+                }
+            }
+            const version = (out && out.release && out.release.version) || "";
+            const request = await recordPush(req, db, actor, r.ROWID, { commitSha: (out && out.commit) || "", version, alreadyThere,
+                drawing: r.drawing || C.fingerprint(uiKey), via: "from the Cliq bot" });
+            const on = master ? "master branch" : "mock branch";
+            const as = alreadyThere && m === "alias" ? branch.realId[branch.byKey[uiKey]] || "" : "";
+            const message = (alreadyThere ? `The same icon is already on the ${on}${as && C.normId(as) !== nid ? " as " + as : ""} — recorded as pushed.`
+                : `${replaceId ? "Replaced " + replaceId + " in " : "Pushed \"" + r.iconName + "\" to "}${file} on the ${on}.`) +
+                (out && out.release && out.release.external ? " The office npm publisher now publishes the new version; the requester and the admins get it when it is out."
+                    : version ? ` Version ${version}${out.release.pending ? " is committed and will be published within a minute." : " is published."}` : "") +
+                (out && out.releaseOff ? " No npm version: the release is switched off on this server." : "");
+            return { request, message, alreadyThere, replaced: replaceId, file };
+        } finally {
+            pushing.delete(String(r.ROWID));
+        }
+    }
 
     // ── identity ────────────────────────────────────────────────────────────
     router.get("/me", wrap(async (req, res) => {
@@ -493,11 +772,10 @@ function createWorkflowRouter({ requireSession }) {
             .concat(String(process.env.RELEASE_NOTIFY_EMAILS || "").split(",")).map(norm)
             .concat(members.filter((m) => m.memberType === "admin" && !isExpired(m)).map((m) => norm(m.userEmail))).filter(Boolean))];
         const msg = releaseMail(r), sent = [], failed = [];
-        for (const to of admins) {
-            const out = await sendMail(req, { to, subject: msg.subject, html: msg.html, text: msg.text });
-            (out.ok ? sent : failed).push(out.ok ? to : { to, error: out.error });
-        }
-        console.log(`[release] ${r.name}@${r.version || "?"} (${r.tag}) ${status} on ${r.branch}: mailed ${sent.length} admin(s)${failed.length ? ", failed " + failed.length : ""}`);
+        const adminOut = await Promise.all(admins.map((to) => tell(req, to, msg, cliq.releaseCard(req, { release: r }))));
+        for (const o of adminOut) (o.mail.ok ? sent : failed).push(o.mail.ok ? o.to : { to: o.to, error: o.mail.error });
+        const botFailed = adminOut.filter((o) => !o.cliq.ok).map((o) => ({ to: o.to, error: o.cliq.error }));
+        console.log(`[release] ${r.name}@${r.version || "?"} (${r.tag}) ${status} on ${r.branch}: mailed ${sent.length} admin(s)${failed.length ? ", failed " + failed.length : ""}; Cliq ${adminOut.length - botFailed.length}${botFailed.length ? ", failed " + botFailed.length : ""}`);
         // The pushed requests whose icon commit is in this release: record the result on the request + its timeline.
         const commits = (Array.isArray(b.commits) ? b.commits : []).map((c) => str(c, 64).toLowerCase()).filter((c) => /^[0-9a-f]{7,64}$/.test(c));
         let requests = 0;
@@ -509,10 +787,17 @@ function createWorkflowRouter({ requireSession }) {
                 await db.update("icon_requests", q.ROWID, { releaseStatus: status, releaseVersion: r.version, releaseTag: r.tag, releaseError: status === "failed" ? r.error.slice(0, 500) : "" });
                 await db.insert("request_events", { requestId: String(q.ROWID), actor: "npm publisher", action: status === "published" ? "npm_published" : "npm_publish_failed",
                     note: status === "published" ? `${r.name}@${r.version} · tag ${r.tag}` : `${r.version || "version not set"}: ${r.error.slice(0, 400)}` });
+                // The requester gets the version of their icon (an admin requester already got the admin message).
+                const to = norm(q.requestedBy);
+                if (to && !admins.includes(to)) {
+                    const o = await tell(req, to, msg, cliq.releaseCard(req, { release: r, request: q }));
+                    const bad = [!o.mail.ok && "mail (" + o.mail.error + ")", !o.cliq.ok && "Cliq (" + o.cliq.error + ")"].filter(Boolean);
+                    if (bad.length) await db.insert("request_events", { requestId: String(q.ROWID), actor: "npm publisher", action: "notify_failed", note: `version to ${to}: ${bad.join("; ")}`.slice(0, 500) });
+                }
                 requests++;
             }
         }
-        res.json({ success: true, sent: sent.length, failed, requests, local: !(req.headers["x-zc-projectid"] || req.headers["x-zc-admin-cred-token"]) });
+        res.json({ success: true, sent: sent.length, failed, cliqFailed: botFailed, requests, local: !(req.headers["x-zc-projectid"] || req.headers["x-zc-admin-cred-token"]) });
     }));
 
     // ── icon categories (filter chips; Size + Stroke width in the Library preview) ──
@@ -587,24 +872,28 @@ function createWorkflowRouter({ requireSession }) {
             symbolId, sprite, iconName: str(b.iconName || symbolId, 200), ...packed,
             targetSprite, note: str(b.note, 1000), stage,
             requestedBy: me(req).email || "", requestedByName: me(req).name || "",
+            drawing: str(b.drawing, 80), // fingerprint of the UI library drawing (set by the Library), recorded at the push
             status: "pending", assignedDesigner: "", assignedUI: "",
             designerDecision: "", uiDecision: "", designerBy: "", uiBy: "", notifiedDesigners: "", notifiedUI: "", pushCommitSha: ""
         });
         await setIconStatus(db, symbolId, sprite, stage === "master" ? "master_requested" : "requested", req);
         await logEvent(db, saved.ROWID, req, stage === "master" ? "requested_master" : "requested", b.note);
 
-        // Step 1: submitting mails the Visual audit approvers only (a mail problem never blocks the request).
-        // The UI audit approvers are mailed after a Visual audit approver approves (see /review).
+        // Step 1: submitting notifies the Visual audit approvers only, by mail and by the Cliq bot (a delivery
+        // problem never blocks the request). The UI audit approvers follow after a Visual approver approves (see /review).
         const members = await db.all("members");
         const d = await mailApprovers(req, db, saved, "designer", members);
         // The pool is every eligible approver, whether or not the mail got through (mailStatus says how it went).
         const request = await db.update("icon_requests", saved.ROWID, {
             notifiedDesigners: d.pool.map((x) => x.userEmail).join(","), mailStatus: mailState([d])
         });
+        // Admins hear about every new request (the requester is the one acting here, so they are not told).
+        await notify(req, db, "requested", saved, { actor: actorOf(req), members, skip: d.pool.map((x) => x.userEmail) });
         // Nobody to mail because the only Visual audit approver is the requester themselves?
         const selfOnly = !d.pool.length && members.some((m) => !isExpired(m) && approverOf(m) === "designer" && norm(m.userEmail) === norm(me(req).email));
         res.json({ success: true, request: request || saved,
-            notified: { designer: d.sent.length, ui: 0, failed: d.failed.length, local: d.sent.some((x) => x.dev), error: (d.failed[0] || {}).error || "", selfOnly } });
+            notified: { designer: d.sent.length, ui: 0, failed: d.failed.length, local: d.sent.some((x) => x.dev), error: (d.failed[0] || {}).error || "", selfOnly,
+                cliq: d.cliq.sent.filter((x) => !x.dev).length, cliqFailed: d.cliq.failed.length, cliqError: (d.cliq.failed[0] || {}).error || "" } });
     }));
 
     router.get("/requests", requireRole(), wrap(async (req, res) => {
@@ -660,56 +949,19 @@ function createWorkflowRouter({ requireSession }) {
         for (const [role, to] of [["designer", designer], ["ui", ui]]) {
             if (!to) continue;
             if (role === "ui" && r.designerDecision !== "approved") continue; // not their turn yet: mailed once the Designer approves
-            const msg = approvalMail(req, { role, request: saved || r });
-            const out = await sendMail(req, { to, subject: msg.subject, html: msg.html, text: msg.text });
-            mail.push({ role, ...out });
+            const both = await tell(req, to, approvalMail(req, { role, request: saved || r }), cliq.approvalCard(req, { role, request: saved || r }));
+            const out = both.mail, bot = both.cliq;
+            mail.push({ role, ...out, cliq: bot });
             await logEvent(db, r.ROWID, req, out.ok ? "mail_sent" : "mail_failed",
                 `${role} approval mail ${out.ok ? (out.dev ? "logged (local run)" : "sent") : "failed (" + out.error + ")"}: ${to}`);
+            await logEvent(db, r.ROWID, req, bot.ok ? "cliq_sent" : "cliq_failed",
+                `${role} approval Cliq card ${bot.ok ? (bot.dev ? "logged only (the bot is not configured)" : bot.via === "cliq-direct" ? "sent as a direct message (not subscribed to the bot)" : "sent") : "failed (" + bot.error + ")"}: ${to}`);
         }
         res.json({ success: true, request: saved, mail });
     }));
 
     router.post("/requests/:id/review", requireRole(), wrap(async (req, res) => {
-        const db = store.forRequest(req);
-        const r = (await db.all("icon_requests")).find((x) => String(x.ROWID) === req.params.id);
-        if (!r) return res.status(404).json({ success: false, message: "Request not found" });
-        if (r.status !== "pending") return res.status(409).json({ success: false, message: "Request is no longer pending" });
-        const decision = String(req.body.decision || "");
-        if (!["approve", "reject"].includes(decision)) return res.status(400).json({ success: false, message: "decision must be approve or reject" });
-
-        const email = norm(me(req).email);
-        const slot = reviewSlot(await db.all("members"), email, r, req.role === "admin");
-        if (!slot) return res.status(403).json({ success: false, message: "You are not an approver for this request" });
-        const decided = slotDecision(r, slot);
-        if (decided) {
-            const by = slot === "designer" ? r.designerBy : r.uiBy;
-            return res.status(409).json({ success: false, message: `The ${slot === "ui" ? "UI" : "Visual"} audit is already ${decided}${by ? " by " + by : ""}` });
-        }
-        const asDesigner = slot === "designer", asUI = slot === "ui";
-
-        const value = decision === "approve" ? "approved" : "rejected";
-        const fields = {};
-        if (asDesigner) Object.assign(fields, { designerDecision: value, designerBy: me(req).email || "" });
-        if (asUI) Object.assign(fields, { uiDecision: value, uiBy: me(req).email || "" });
-        const merged = { ...r, ...fields };
-        if (value === "rejected") fields.status = "rejected";
-        else if (merged.designerDecision === "approved" && merged.uiDecision === "approved") fields.status = "approved";
-
-        const saved = await db.update("icon_requests", r.ROWID, fields);
-        await logEvent(db, r.ROWID, req, `${asDesigner ? "designer" : "ui"}_${value}`, req.body.note);
-
-        // Step 2: the Visual audit approved, so now the UI audit approvers are mailed (or the one assigned to the UI review).
-        let uiMail = null;
-        if (asDesigner && value === "approved" && fields.status !== "rejected") {
-            const members = await db.all("members");
-            const scope = r.assignedUI ? members.filter((m) => norm(m.userEmail) === norm(r.assignedUI)) : members;
-            const out = await mailApprovers(req, db, { ...r, ...fields }, "ui", scope);
-            uiMail = { sent: out.sent.length, failed: out.failed.length, local: out.sent.some((x) => x.dev), error: (out.failed[0] || {}).error || "", pool: out.pool.length };
-            await db.update("icon_requests", r.ROWID, { notifiedUI: out.pool.map((x) => x.userEmail).join(","), mailStatus: mailState([out]) });
-        }
-        // Both audits passed: the icon keeps its requested status until an admin pushes it.
-        if (fields.status === "rejected") await setIconStatus(db, r.symbolId, r.sprite, startStatus(r), req);
-        res.json({ success: true, request: saved, uiMail });
+        res.json({ success: true, ...(await reviewRequest(req, store.forRequest(req), actorOf(req), req.params.id, String(req.body.decision || ""), req.body.note)) });
     }));
 
     // Admin self-check: sends one mail to the signed-in admin and says where it ran and what Catalyst answered.
@@ -747,7 +999,9 @@ function createWorkflowRouter({ requireSession }) {
         const request = await db.update("icon_requests", r.ROWID, fields);
         res.json({ success: true, request, mailStatus: state,
             sent: results.reduce((n, x) => n + x.sent.length, 0), failed: results.reduce((n, x) => n + x.failed.length, 0),
-            error: ((results.flatMap((x) => x.failed)[0]) || {}).error || "" });
+            error: ((results.flatMap((x) => x.failed)[0]) || {}).error || "",
+            cliq: results.reduce((n, x) => n + x.cliq.sent.filter((y) => !y.dev).length, 0), cliqFailed: results.reduce((n, x) => n + x.cliq.failed.length, 0),
+            cliqError: ((results.flatMap((x) => x.cliq.failed)[0]) || {}).error || "" });
     }));
 
     router.delete("/requests/:id", requireRole(), wrap(async (req, res) => {
@@ -769,34 +1023,96 @@ function createWorkflowRouter({ requireSession }) {
     }));
 
     router.post("/requests/:id/push", requireRole(), wrap(async (req, res) => {
-        const db = store.forRequest(req);
-        const r = (await db.all("icon_requests")).find((x) => String(x.ROWID) === req.params.id);
-        if (!r) return res.status(404).json({ success: false, message: "Request not found" });
-        if (r.status === "pushed") return res.status(409).json({ success: false, message: "Already pushed" });
-        if (r.status !== "approved") return res.status(409).json({ success: false, message: "Both the Visual audit and the UI audit must approve before pushing" });
-        if (!canPush(req, r)) {
-            return res.status(403).json({ success: false, message: stageOf(r) === "master"
-                ? "Only an admin can approve and push to the master branch" : "Only an admin can push this icon to the mock branch" });
-        }
-        const master = stageOf(r) === "master";
-        const saved = await db.update("icon_requests", r.ROWID, { status: "pushed", pushCommitSha: str(req.body.commitSha, 80), pushedBy: me(req).email || "", pushedAt: new Date().toISOString(),
-            releaseStatus: "", releaseVersion: "", releaseError: "" });
-        await setIconStatus(db, r.symbolId, r.sprite, master ? "master_verified" : "mock_verified", req, req.body.drawing);
-        await logEvent(db, r.ROWID, req, master ? "pushed_master" : "pushed_mock",
-            `to ${r.targetSprite}${req.body.version ? " · published " + str(req.body.version, 60) : ""}${req.body.alreadyThere ? " (already in the sprite)" : ""}`);
-        res.json({ success: true, request: saved });
+        const b = req.body || {};
+        const request = await recordPush(req, store.forRequest(req), actorOf(req), req.params.id,
+            { commitSha: b.commitSha, drawing: b.drawing, version: b.version, alreadyThere: !!b.alreadyThere });
+        res.json({ success: true, request });
     }));
 
     // Admin turns down a master request after both audits passed: the icon stays mock verified.
     router.post("/requests/:id/decline", requireRole(["admin"]), wrap(async (req, res) => {
-        const db = store.forRequest(req);
-        const r = (await db.all("icon_requests")).find((x) => String(x.ROWID) === req.params.id);
+        res.json({ success: true, request: await declineRequest(req, store.forRequest(req), actorOf(req), req.params.id, req.body && req.body.note) });
+    }));
+
+    // ── Cliq bot ────────────────────────────────────────────────────────────
+    // Admin self-check: one test bot message to the signed-in admin; says what Cliq answered.
+    router.post("/cliq/test", requireSession, requireRole(["admin"]), wrap(async (req, res) => {
+        const to = me(req).email;
+        const out = await cliq.sendCliq(req, {
+            to, text: "This is a test message from the Icon Assets tool. If you can read it, approval cards will be delivered.",
+            card: { title: "Icon Assets — test message", theme: "modern-inline" }
+        });
+        res.json({ success: true, ok: out.ok && !out.dev, dev: !!out.dev, via: out.via || "", configured: cliq.isConfigured(), bot: String(process.env.CLIQ_BOT_NAME || ""), to, error: out.error || "" });
+    }));
+
+    // PNG of a request's icon for the bot card. No session (Cliq fetches it): ?sig= is an HMAC of the request id.
+    let resvgReady = null;
+    function loadResvg() {
+        if (!resvgReady) {
+            resvgReady = (async () => {
+                const { Resvg, initWasm } = require("@resvg/resvg-wasm");
+                await initWasm(require("fs").readFileSync(require.resolve("@resvg/resvg-wasm/index_bg.wasm")));
+                return Resvg;
+            })().catch((e) => { resvgReady = null; throw e; });
+        }
+        return resvgReady;
+    }
+    // A stand-alone preview: the icon on a white tile, drawn in a dark colour where it inherits its colour.
+    function previewSvg(svg) {
+        const m = /<svg\b[^>]*>/i.exec(svg);
+        if (!m) return svg;
+        let open = m[0];
+        if (!/\scolor\s*=/.test(open)) open = open.replace(/<svg\b/i, '<svg color="#1f2937"');
+        return svg.slice(0, m.index) + open + svg.slice(m.index + m[0].length);
+    }
+    router.get("/cliq/preview/:file", wrap(async (req, res) => {
+        const id = String(req.params.file || "").replace(/\.png$/i, "");
+        if (!cliq.validPreviewSig(id, req.query.sig)) return res.status(401).json({ success: false, message: "Invalid preview link" });
+        const r = (await store.forRequest(req).all("icon_requests")).find((x) => String(x.ROWID) === id);
         if (!r) return res.status(404).json({ success: false, message: "Request not found" });
-        if (stageOf(r) !== "master" || r.status !== "approved") return res.status(409).json({ success: false, message: "Only an audited master request can be declined" });
-        const saved = await db.update("icon_requests", r.ROWID, { status: "rejected" });
-        await setIconStatus(db, r.symbolId, r.sprite, startStatus(r), req);
-        await logEvent(db, r.ROWID, req, "admin_declined", req.body && req.body.note);
-        res.json({ success: true, request: saved });
+        const Resvg = await loadResvg();
+        const png = new Resvg(previewSvg(readSvg(r)), { fitTo: { mode: "width", value: 256 }, background: "#ffffff" }).render().asPng();
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        res.send(Buffer.from(png));
+    }));
+
+    // Called by the bot's button / form functions. The person is the Cliq user who clicked (their e-mail, sent by
+    // Cliq itself); their role is looked up here, so the same rules apply as in the app.
+    router.post("/cliq/action", wrap(async (req, res) => {
+        const want = String(process.env.CLIQ_ACTION_TOKEN || "");
+        const got = String(req.headers["x-cliq-token"] || "");
+        if (want.length < 24) return res.status(503).json({ ok: false, message: "CLIQ_ACTION_TOKEN is not set on the server" });
+        if (got.length !== want.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want))) {
+            return res.status(401).json({ ok: false, message: "Invalid Cliq token" });
+        }
+        const b = req.body || {};
+        const email = norm(b.email), action = String(b.action || ""), id = str(b.requestId, 40).trim();
+        if (!email || !id) return res.status(400).json({ ok: false, message: "email and requestId are required" });
+        const actor = { email, name: str(b.name, 200), role: await getRole(req, email) };
+        const db = store.forRequest(req);
+        try {
+            let message;
+            if (action === "approve" || action === "reject") {
+                const out = await reviewRequest(req, db, actor, id, action, b.note);
+                const r = out.request, audit = out.slot === "ui" ? "UI audit" : "Visual audit";
+                message = action === "reject" ? `Rejected "${r.iconName}" in the ${audit}. The requester and the admins are informed.`
+                    : r.status === "approved" ? `Approved "${r.iconName}" in the ${audit}. Both audits passed: the admins got the push request.`
+                    : `Approved "${r.iconName}" in the ${audit}. It moved to the UI audit.`;
+            } else if (action === "decline") {
+                const r = await declineRequest(req, db, actor, id, b.note);
+                message = `Declined the master push of "${r.iconName}". It stays mock verified.`;
+            } else if (action === "push") {
+                message = (await pushRequest(req, db, actor, id)).message;
+            } else {
+                return res.status(400).json({ ok: false, message: "action must be approve, reject, push or decline" });
+            }
+            res.json({ ok: true, message });
+        } catch (err) {
+            if (!err.status) throw err;
+            // A rule said no (already decided, not your audit, …): answered as a normal message for the bot to show.
+            res.json({ ok: false, message: err.message });
+        }
     }));
 
     return router;

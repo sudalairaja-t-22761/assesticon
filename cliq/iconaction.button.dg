@@ -1,0 +1,78 @@
+// Cliq FUNCTION of type "Button" — name it exactly:  iconaction   (or set CLIQ_FUNCTION on the server to your name)
+// Runs when someone presses Approve / Reject / Push / Decline on a card sent by the Icon Assets bot.
+// The button's key is "<action>:<requestId>". Every action first opens a small form: a note for approve / reject /
+// decline (required for reject and decline), and a confirmation for push. The form is handled by "iconactionform".
+//
+// Handler arguments given by Cliq: user, chat, message, arguments, target
+
+key = arguments.get("key").toString();
+parts = key.toList(":");
+action = parts.get(0);
+requestId = parts.get(1);
+
+title = "Approve icon";
+hint = "Optional note for the requester.";
+label = "Approve";
+mandatory = false;
+if(action == "reject")
+{
+	title = "Reject icon";
+	hint = "Say what has to change. The requester and the admins see this note.";
+	label = "Reject";
+	mandatory = true;
+}
+else if(action == "decline")
+{
+	title = "Decline master push";
+	hint = "Say why. The icon stays mock verified.";
+	label = "Decline";
+	mandatory = true;
+}
+else if(action == "push")
+{
+	title = "Push icon to the branch";
+	hint = "This commits the icon to the branch and starts a new npm version. Press Push to confirm.";
+	label = "Push";
+}
+
+inputs = list();
+if(action != "push")
+{
+	note = Map();
+	note.put("type","textarea");
+	note.put("name","note");
+	note.put("label","Note");
+	note.put("placeholder","Type your note");
+	note.put("mandatory",mandatory);
+	inputs.add(note);
+}
+else
+{
+	// A form needs one visible field: this one only confirms the push.
+	confirm = Map();
+	confirm.put("type","text");
+	confirm.put("name","note");
+	confirm.put("label","Comment (optional)");
+	confirm.put("placeholder","Leave empty and press Push");
+	confirm.put("mandatory",false);
+	inputs.add(confirm);
+}
+hidden = Map();
+hidden.put("type","hidden");
+hidden.put("name","key");
+hidden.put("value",key);
+inputs.add(hidden);
+
+formAction = Map();
+formAction.put("type","invoke.function");
+formAction.put("name","iconactionform");
+
+form = Map();
+form.put("type","form");
+form.put("title",title);
+form.put("hint",hint);
+form.put("name","iconactionform");
+form.put("button_label",label);
+form.put("inputs",inputs);
+form.put("action",formAction);
+return form;

@@ -805,37 +805,44 @@ async function spWriteIndex(req, index) {
 // Routes: /api/master-library/{config,sync,file,save,test-connection}
 // ===================================
 const { createMasterLibraryRouter } = require("./routes/master-library");
-app.use("/api/master-library", createMasterLibraryRouter({
+const mockLibraryRouter = createMasterLibraryRouter({
     getSession,
     requireSession
-}));
+});
+app.use("/api/master-library", mockLibraryRouter);
 
 // Second repository: the Library page's icon repo (Iconassest / Sprite), configured with
 // ICON_REPO_* variables. Same routes as above under /api/icon-library. The Saved Sprites /
 // Update Sprite flow keeps using /api/master-library (CRM_UI_LIBRARY) unchanged.
-app.use("/api/icon-library", createMasterLibraryRouter({
+const iconLibraryRouter = createMasterLibraryRouter({
     getSession,
     requireSession,
     cfg: require("./lib/repo-config").loadIconRepo(),
     tag: "icon-library",
     tokenVar: "ICON_REPO_TOKEN"
-}));
+});
+app.use("/api/icon-library", iconLibraryRouter);
 
 // Master branch of CRM_UI_LIBRARY (MASTER_REPO_BRANCH, default CRM_UI_LIBRARY_ICON_BRANCH_CLONE): read by every
 // signed-in user for the Library compare; commits (approved master requests) are admin only.
-app.use("/api/master-branch", createMasterLibraryRouter({
+const masterBranchRouter = createMasterLibraryRouter({
     getSession,
     requireSession,
     cfg: require("./lib/repo-config").loadMasterRepo(),
     tag: "master-branch",
     tokenVar: "MASTER_REPO_TOKEN / REPO_TOKEN",
     saveGuard: require("./lib/roles").requireRole(["admin"])
-}));
+});
+app.use("/api/master-branch", masterBranchRouter);
 
 // Icon verification workflow: members/roles, requests, icon status (Catalyst Data Store tables:
 // members, icon_status, icon_requests, request_events — local JSON file in dev).
 const { createWorkflowRouter } = require("./routes/workflow");
-app.use("/api", createWorkflowRouter({ requireSession }));
+// repos: the server-side push of an approved request (the Cliq bot's Push button) reads + commits through these.
+app.use("/api", createWorkflowRouter({
+    requireSession,
+    repos: { mock: mockLibraryRouter.repo, master: masterBranchRouter.repo, ui: iconLibraryRouter.repo }
+}));
 
 // ===================================
 // SAVE SPRITE (new endpoint — local disk + Stratus, no Catalyst DataStore needed)
