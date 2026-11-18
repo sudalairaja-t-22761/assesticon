@@ -1,0 +1,41 @@
+/* ============================================================
+   REPORT A BUG — issue form, reports, admin recipient list
+   ============================================================ */
+.bug-cols { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(300px, 1fr); gap: 16px; align-items: start; }
+.bug-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.bug-form { display: flex; flex-direction: column; gap: 8px; }
+.bug-label { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-top: 6px; }
+.bug-muted { font-size: 12px; font-weight: 400; color: var(--text-tertiary); }
+.bug-gap { margin-bottom: 10px; }
+.bug-text, .bug-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); background: var(--bg-input); color: var(--text-primary); font: inherit; font-size: 13px; }
+.bug-text { resize: vertical; min-height: 120px; line-height: 1.5; }
+.bug-text:focus-visible, .bug-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.bug-count { align-self: flex-end; font-size: 11px; color: var(--text-tertiary); }
+.bug-drop { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px; border: 1px dashed var(--border); border-radius: var(--radius-sm, 6px); }
+.bug-preview { max-width: 100%; max-height: 240px; align-self: flex-start; border: 1px solid var(--border-light); border-radius: var(--radius-sm, 6px); }
+.bug-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.bug-msg { padding: 10px 12px; border-radius: var(--radius-sm, 6px); font-size: 13px; }
+.bug-msg.is-ok { background: var(--success-bg, #e7f6ee); color: var(--success, #0d8a53); }
+.bug-msg.is-bad { background: var(--danger-bg, #FCE8E6); color: var(--danger, #c0392b); }
+.bug-bad { color: var(--danger, #c0392b); }
+.bug-empty { padding: 20px 8px; text-align: center; font-size: 13px; color: var(--text-tertiary); }
+
+.bug-list { display: flex; flex-direction: column; gap: 10px; max-height: 560px; overflow-y: auto; }
+.bug-item { padding: 10px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-sm, 6px); font-size: 13px; }
+.bug-item header { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.bug-item p { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-primary); }
+.bug-item footer { margin-top: 6px; overflow-wrap: anywhere; }
+.bug-thumb { display: block; max-width: 100%; max-height: 160px; border: 1px solid var(--border-light); border-radius: 4px; }
+
+.bug-search { position: relative; margin-bottom: 10px; }
+.bug-results { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); max-height: 260px; overflow-y: auto; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); box-shadow: 0 10px 30px rgba(0, 0, 0, .18); }
+.bug-result { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 8px 11px; border: 0; background: none; color: var(--text-primary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.bug-result:hover, .bug-result:focus-visible { background: var(--bg-hover); outline: none; }
+.bug-result-note { padding: 8px 11px; font-size: 12px; color: var(--text-tertiary); }
+.bug-people { display: flex; flex-direction: column; gap: 6px; }
+.bug-person { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border: 1px solid var(--border-light); border-radius: var(--radius-sm, 6px); font-size: 13px; }
+.bug-person > div { display: flex; flex-direction: column; min-width: 0; }
+.bug-person b, .bug-person span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bug-person a.btn { text-decoration: none; flex-shrink: 0; }
+
+@media (max-width: 980px) { .bug-cols { grid-template-columns: 1fr; } }

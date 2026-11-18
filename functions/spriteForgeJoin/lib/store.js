@@ -39,6 +39,16 @@ const MAPPED = {
     members: {
         required: { userName: "user_name", userEmail: "user_email", memberType: "role", approverType: "approver", addedOn: "added_on", expiresAt: "expires_at" },
         optional: { userAvatar: "user_avatar", addedBy: "added_by" }
+    },
+    // bug_reports ("Report a bug"): description and cliq_failed must be Text columns (up to 3000 / 1500 characters),
+    // the rest Var Char.
+    bug_reports: {
+        required: {
+            text: "description", page: "page", reportedBy: "reported_by", reportedByName: "reported_by_name",
+            imageKey: "image_key", imageType: "image_type", imageName: "image_name",
+            cliqSent: "cliq_sent", cliqFailed: "cliq_failed", status: "status", at: "reported_at"
+        },
+        optional: {}
     }
 };
 const MAP_CHUNK = 50;

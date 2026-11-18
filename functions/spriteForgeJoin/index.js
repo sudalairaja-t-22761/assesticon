@@ -844,6 +844,27 @@ app.use("/api", createWorkflowRouter({
     repos: { mock: mockLibraryRouter.repo, master: masterBranchRouter.repo, ui: iconLibraryRouter.repo }
 }));
 
+// "Report a bug": any signed-in user sends an issue (+ optional screenshot); the Cliq bot forwards it to the people
+// an admin chose. The screenshot is kept in Stratus (local disk on a local run).
+const LOCAL_BUG_DIR = path.join(os.tmpdir(), "svgforge-bugs");
+const { createBugRouter } = require("./routes/bug-report");
+app.use("/api", createBugRouter({
+    requireSession,
+    files: {
+        async put(req, key, buf, ct) {
+            if (shouldUseStratus(req)) return stratusPut(req, key, buf, ct);
+            const f = path.join(LOCAL_BUG_DIR, path.basename(key));
+            fs.mkdirSync(LOCAL_BUG_DIR, { recursive: true });
+            fs.writeFileSync(f, buf);
+        },
+        async get(req, key) {
+            if (shouldUseStratus(req)) return stratusGet(req, key);
+            const f = path.join(LOCAL_BUG_DIR, path.basename(key));
+            return fs.existsSync(f) ? fs.readFileSync(f) : null;
+        }
+    }
+}));
+
 // ===================================
 // SAVE SPRITE (new endpoint — local disk + Stratus, no Catalyst DataStore needed)
 // POST /api/save-sprite

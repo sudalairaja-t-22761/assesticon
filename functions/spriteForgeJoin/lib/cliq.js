@@ -214,4 +214,7 @@ function releaseCard(req, { release: r, request }) {
     };
 }
 
-module.exports = { sendCliq, isConfigured, approvalCard, pushCard, statusCard, releaseCard, previewUrl, previewSig, validPreviewSig };
+/** Public address of an API path of this function ("" when APP_URL / API_PUBLIC_URL are not set), e.g. for a card image. */
+const publicUrl = (apiPath) => { const base = apiBase(); return base ? `${base}/api/${String(apiPath).replace(/^\/+/, "")}` : ""; };
+
+module.exports = { sendCliq, isConfigured, cliqBase, publicUrl, approvalCard, pushCard, statusCard, releaseCard, previewUrl, previewSig, validPreviewSig };
