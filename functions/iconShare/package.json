@@ -1,0 +1,20 @@
+{
+	"name": "iconShare",
+	"version": "1.0.0",
+	"description": "Catalyst Advanced I/O function: read-only API that shares the verified CRM icons (mock and master branch of CRM_UI_LIBRARY) with other products and projects",
+	"main": "index.js",
+	"engines": {
+		"node": ">=20"
+	},
+	"scripts": {
+		"start": "node index.js",
+		"dev": "node --watch index.js"
+	},
+	"dependencies": {
+		"cheerio": "1.0.0-rc.12",
+		"dotenv": "16.4.5",
+		"express": "4.17.1",
+		"isomorphic-git": "1.43.1",
+		"zcatalyst-sdk-node": "3.4.0"
+	}
+}

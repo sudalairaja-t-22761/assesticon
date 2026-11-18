@@ -37,8 +37,19 @@ for name in TARGETS:
             text = text.rstrip("\n") + "\n%s=%s\n" % (key, value)
     open(path, "w").write(text)
     print("Updated %s with your git login (username: %s, secret length: %d)." % (name, user or "oauth2", len(secret)))
+# The iconShare function (verified-icon share API) reads the same repository with its own copy of REPO_TOKEN.
+share = os.path.join(ROOT, "functions", "iconShare", ".env.production")
+if "--production" in sys.argv and os.path.exists(share):
+    text = open(share).read()
+    for key, value in (("REPO_TOKEN", secret), ("REPO_TOKEN_USER", user or "oauth2")):
+        if re.search(r"(?m)^%s=" % key, text):
+            text = re.sub(r"(?m)^%s=.*$" % key, lambda m, k=key, v=value: k + "=" + v, text)
+        else:
+            text = text.rstrip("\n") + "\n%s=%s\n" % (key, value)
+    open(share, "w").write(text)
+    print("Updated functions/iconShare/.env.production too.")
 if "--production" in sys.argv:
-    print("Now redeploy so production gets it:  catalyst deploy --only functions:spriteForgeJoin")
+    print("Now redeploy so production gets it:  catalyst deploy --only functions:spriteForgeJoin,iconShare")
 else:
     print("The backend restarts by itself; check in 5 s with:")
     print("  curl -s localhost:3001/api/icon-library/diagnose | grep -o '\"hint\":\"[^\"]*\"'")

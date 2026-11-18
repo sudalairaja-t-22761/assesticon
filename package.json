@@ -10,6 +10,8 @@
     "deploy": "npm run build:client && catalyst deploy --only functions:spriteForgeJoin,client",
     "dev:append": "FORCE_LOCAL_ENV=true node --watch functions/spriteAppend/index.js",
     "deploy:append": "catalyst deploy --only functions:spriteAppend",
+    "dev:share": "FORCE_LOCAL_ENV=true node --watch functions/iconShare/index.js",
+    "deploy:share": "catalyst deploy --only functions:iconShare",
     "publisher": "node scripts/npm-publisher.js"
   },
   "engines": {
