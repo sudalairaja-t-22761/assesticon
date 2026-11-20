@@ -42,7 +42,7 @@
   // Timeline action labels for stored actions like designer_approved.
   var ACTION_LABEL = { requested: 'requested (mock)', requested_master: 'requested (master)', pushed: 'pushed',
     pushed_mock: 'pushed to mock', pushed_master: 'approved + pushed to master', admin_declined: 'declined by admin',
-    npm_published: 'published to npm', npm_publish_failed: 'npm publish failed',
+    npm_published: 'published to npm', npm_publish_failed: 'npm publish failed', npm_republish_requested: 're-publish requested',
     cliq_sent: 'Cliq message sent', cliq_failed: 'Cliq message failed', notify_failed: 'notification failed' };
   function actionLabel(action) {
     var m = /^(designer|ui)_(approved|rejected)$/.exec(action);
@@ -563,13 +563,15 @@
       var on = stageOf(r) === 'master' ? 'on master' : 'on mock', rel = releaseState(r);
       return '<span class="vf-pill vf-pill-pushed">' + on + (rel === 'published' ? ' · v' + esc(r.releaseVersion) : '') + '</span>' +
         (rel === 'failed' ? ' <span class="vf-pill vf-pill-rejected" title="' + esc(r.releaseError || '') + '">npm publish failed</span>'
+          : rel === 'requested' ? ' <span class="vf-pill vf-pill-pending" title="An admin asked for the npm publish again; the office npm publisher answers on its next run">re-publish requested…</span>'
           : rel === 'pending' ? ' <span class="vf-pill vf-pill-pending" title="The office npm publisher bumps the version, publishes it, then pushes the version">publishing…</span>' : '');
     }
     return pill(r.status);
   }
-  // npm release of a pushed request: 'published' | 'failed' | 'pending' (pushed in the last day, no result yet) | ''.
+  // npm release of a pushed request: 'published' | 'failed' | 'requested' (an admin asked to publish again) |
+  // 'pending' (pushed in the last day, no result yet) | ''.
   function releaseState(r) {
-    if (r.releaseStatus === 'published' || r.releaseStatus === 'failed') return r.releaseStatus;
+    if (r.releaseStatus === 'published' || r.releaseStatus === 'failed' || r.releaseStatus === 'requested') return r.releaseStatus;
     return r.status === 'pushed' && r.pushedAt && Date.now() - new Date(r.pushedAt).getTime() < 864e5 ? 'pending' : '';
   }
   function stageTag(r) { var st = stageOf(r); return '<span class="vf-pill-tag vf-stage-' + st + '">' + (st === 'master' ? 'Master' : 'Mock') + '</span>'; }
@@ -820,7 +822,7 @@
     var rel = releaseState(r);
     if (rel || r.status !== 'pushed') {
       steps.push({ label: rel === 'published' ? 'Published v' + r.releaseVersion : rel === 'failed' ? 'npm publish failed' : 'Published to npm',
-        cls: rel === 'published' ? 'done' : rel === 'failed' ? 'rejected' : rel === 'pending' ? 'current' : '' });
+        cls: rel === 'published' ? 'done' : rel === 'failed' ? 'rejected' : rel === 'pending' || rel === 'requested' ? 'current' : '' });
     }
     return '<div class="vf-steps">' + steps.map(function (s) { return '<div class="vf-step ' + s.cls + '">' + s.label + '</div>'; }).join('') + '</div>';
   }
@@ -854,6 +856,26 @@
           '<button class="btn btn-ghost btn-sm" id="wfDeclineBtn" type="button" style="color:var(--danger)">Decline</button>';
       } else if (r.status === 'approved') {
         actions += '<span class="vf-msg">Both audits passed — waiting for push approval. An admin will push it to the ' + (stageOf(r) === 'master' ? 'master' : 'mock') + ' branch.</span>';
+      }
+      // npm release of a pushed request: the result, and for an admin the way to ask for the publish again.
+      var rel = releaseState(r), askedAgo = r.republishAt ? Date.now() - new Date(r.republishAt).getTime() : Infinity;
+      if (r.status === 'pushed' && rel !== 'published' && (rel || wf.role === 'admin')) {
+        actions += '<span class="vf-msg">' + (rel === 'failed' ? '<b style="color:var(--danger)">npm publish failed</b>' + (r.releaseError ? ': ' + esc(r.releaseError) : '') +
+            '<br>The icon is on the branch; the package version is pushed only after a successful publish.'
+          : rel === 'requested' ? 'Re-publish requested' + (r.republishBy ? ' by ' + esc(r.republishBy) : '') + ' — the office npm publisher answers within about a minute.' +
+            (askedAgo > 3e5 ? ' No answer yet: check that the publisher is running on the office Mac (VPN on).' : '')
+          : rel === 'pending' ? 'Publishing to npm — the package version is pushed to the branch only after the publish succeeds.'
+          : 'No npm publish result was recorded for this request.') + '</span>';
+        if (wf.role === 'admin' && r.pushCommitSha && (rel !== 'requested' || askedAgo > 3e5)) {
+          actions += '<button class="btn btn-primary btn-sm" id="wfRepublishBtn" type="button" title="Ask the office npm publisher to publish again. A commit that is already in a published version is reported with that version, not published twice.">Re-publish to npm</button>';
+        }
+      }
+      clearTimeout(wf.relTimer);
+      if (rel === 'requested' || rel === 'pending') { // the result arrives from the publisher: look again shortly
+        wf.relTimer = setTimeout(function () {
+          if (String(wf.openId) !== String(id) || !$('#wfRequestsPage:not(.hidden)').length) return;
+          loadRequests().catch(function () {});
+        }, 20000);
       }
       $('#wfRequestDetail').html('<div class="vf-detail">' +
         '<div class="vf-detail-head"><img src="' + dataUri(r.svg) + '" alt=""><div><b>' + esc(r.iconName) + '</b> ' + stageTag(r) + ' ' + statusPill(r) +
@@ -1002,6 +1024,15 @@
       resetRepoIds();
       return Promise.all([loadRequests(), loadStatuses()]);
     }).catch(function (e) { if (!e || !e.cancelled) fail(e); }).then(done);
+  });
+
+  // Admin asks the office npm publisher to publish a pushed request again (failed, or no result came back).
+  $(document).on('click', '#wfRepublishBtn', function () {
+    var r = wf.open, $b = $(this).prop('disabled', true);
+    api('POST', 'requests/' + r.ROWID + '/republish').then(function () {
+      SF.showToast('Re-publish requested for ' + r.iconName + ' — the office npm publisher answers within about a minute');
+      return loadRequests();
+    }).catch(function (e) { fail(e); $b.prop('disabled', false); });
   });
 
   // Admin turns down an audited master request: the icon stays mock verified.

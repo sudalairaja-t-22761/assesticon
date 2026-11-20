@@ -10,6 +10,10 @@
  *     → ONLY after a successful publish: commit the version and push it to the branch
  *   publish failed → the bump is dropped (nothing pushed), the admins get one failure mail, the next run retries
  *
+ * Re-publish: an admin can ask for the publish of a pushed request again on the Requests page. Each run reads those
+ * (GET <RELEASE_NOTIFY_URL>/../republish), reports that branch's result again even when the error did not change, and
+ * for a commit that is already in a published version reports that version instead of publishing twice.
+ *
  * Every publish (and every new failure) is mailed to the admins through the backend (RELEASE_NOTIFY_URL +
  * RELEASE_NOTIFY_TOKEN in functions/spriteForgeJoin/.env). It uses your own git login (Keychain) and ~/.npmrc.
  *
@@ -127,6 +131,8 @@ async function releaseBranch(b) {
     const pkgFile = path.join(dir, PKG);
     const text = fs.readFileSync(pkgFile, "utf8"), pkg = JSON.parse(text);
     b.seen = { name: pkg.name, version: pkg.version, commit: (await git(dir, ["rev-parse", "HEAD"])).trim() };
+    const { subjects, commits } = await pendingChanges(dir, b.branch);
+    b.seen.commits = commits; // the requests whose icons are in this release (timeline on the request page)
     const taken = await registryVersions(pkg.name);
 
     // A version committed earlier (deferred mode) but not published yet: publish it as it is, nothing to push.
@@ -134,13 +140,14 @@ async function releaseBranch(b) {
     if (own && !taken.has(pkg.version) && !FORCE) {
         log(`${b.branch}: ${pkg.name}@${pkg.version} is committed but not published — publishing it`);
         await publish(dir, b);
-        b.seen.commits = [b.seen.commit];
+        b.seen.commits = [b.seen.commit].concat(commits);
         return notifyPublished(b, pkg.name, pkg.version, b.seen.commit, [`(published the committed version ${pkg.version})`]);
     }
 
-    const { subjects, commits } = await pendingChanges(dir, b.branch);
-    b.seen.commits = commits; // the requests whose icons are in this release (timeline on the request page)
-    if (!subjects.length && !FORCE) { if (flag("once")) log(`${b.branch}: up to date (${pkg.name}@${pkg.version}, no new icons)`); return; }
+    if (!subjects.length && !FORCE) {
+        if (flag("once")) log(`${b.branch}: up to date (${pkg.name}@${pkg.version}, no new icons)`);
+        return reportReleased(dir, b, pkg.name, taken);
+    }
 
     const next = bumpPackageJson(text, { preTag: b.versionTag, preMax: MAX }, taken).to;
     log(`${b.branch}: ${subjects.length} new icon commit(s) → ${pkg.version} → ${next}${DRY ? " (dry run)" : ""}`);
@@ -150,7 +157,61 @@ async function releaseBranch(b) {
     if (DRY) { await git(dir, ["checkout", "--", PKG]); log(`${b.branch}: dry run OK — would push the version commit ${next}`); return; }
 
     const commit = await pushVersion(dir, b, next, subjects);
-    return notifyPublished(b, pkg.name, next, commit, subjects);
+    await notifyPublished(b, pkg.name, next, commit, subjects);
+    return reportReleased(dir, b, pkg.name, new Set(taken).add(next));
+}
+
+// ── re-publish asked by an admin (Requests page → "Re-publish to npm") ──────
+const REPUBLISH_URL = NOTIFY_URL.replace(/\/published\/?(\?.*)?$/, "/republish");
+/** { <branch>: [commit sha] } of the requests an admin wants published again; {} when the backend cannot be asked. */
+function republishRequests() {
+    if (DRY || !NOTIFY_TOKEN || !REPUBLISH_URL || REPUBLISH_URL === NOTIFY_URL) return Promise.resolve({});
+    return new Promise((resolve) => {
+        const u = new URL(REPUBLISH_URL);
+        const req = require(u.protocol === "https:" ? "https" : "http").request(u, { method: "GET", timeout: 20000, headers: { "x-release-token": NOTIFY_TOKEN } }, (res) => {
+            let t = ""; res.on("data", (c) => (t += c)); res.on("end", () => {
+                try { const j = JSON.parse(t); if (res.statusCode === 200 && j.branches) return resolve(j.branches); } catch (_) { /* not JSON */ }
+                if (res.statusCode !== 404) log(`re-publish requests not read: HTTP ${res.statusCode}`); // 404: a backend without this route yet
+                resolve({});
+            });
+        });
+        req.on("timeout", () => req.destroy(new Error("timed out")));
+        req.on("error", (e) => { log("re-publish requests not read: " + e.message); resolve({}); });
+        req.end();
+    });
+}
+
+/**
+ * The re-publish requests of this branch that the run above did not release: their commit is already in a version
+ * (the result never reached the request) → report that version; anything else → report why nothing was published.
+ */
+async function reportReleased(dir, b, name, taken) {
+    const done = (b.seen && b.seen.commits) || [];
+    const open = (b.republish || []).filter((sha) => !done.some((c) => c.startsWith(sha) || sha.startsWith(c)));
+    if (!open.length || DRY) return;
+    const byVersion = new Map(), bad = (sha, error) => notify({ status: "failed", name, version: "", tag: b.tag, branch: b.branch, commit: sha, commits: [sha], error });
+    for (const sha of open) {
+        try {
+            let onBranch = false;
+            for (const depth of [0, 300, 2000]) {
+                if (depth) await git(dir, ["fetch", "-q", "--deepen", String(depth), "origin", `+refs/heads/${b.branch}:refs/remotes/origin/${b.branch}`]);
+                onBranch = await git(dir, ["merge-base", "--is-ancestor", sha, "HEAD"]).then(() => true, () => false);
+                if (onBranch) break;
+            }
+            if (!onBranch) { await bad(sha, `commit ${sha.slice(0, 8)} is not on ${b.branch}, so there is nothing to publish for it`); continue; }
+            // The first version commit after the icon commit is the release that carries it.
+            const rel = (await git(dir, ["log", "--reverse", "--format=%H", `${sha}..HEAD`, "--", PKG])).trim().split("\n")[0];
+            if (!rel) { await bad(sha, `commit ${sha.slice(0, 8)} changed nothing under ${NPM_DIR}/, so no version was published for it`); continue; }
+            const version = JSON.parse(await git(dir, ["show", `${rel}:${PKG}`])).version;
+            if (!taken.has(version)) { await bad(sha, `version ${version} is committed on ${b.branch} but is not on the registry`); continue; }
+            if (!byVersion.has(version)) byVersion.set(version, { commit: rel, commits: [] });
+            byVersion.get(version).commits.push(sha);
+        } catch (e) { await bad(sha, e.message); }
+    }
+    for (const [version, v] of byVersion) {
+        log(`${b.branch}: re-publish asked for ${v.commits.length} commit(s) already published in ${version} — reported`);
+        await notify({ status: "published", name, version, tag: b.tag, branch: b.branch, commit: v.commit, commits: v.commits, subject: `(already published in ${version})` });
+    }
 }
 
 async function publish(dir, b) {
@@ -227,7 +288,7 @@ async function reportFailure(b, err) {
     f[key] = new Date().toISOString();
     writeFailures(f);
     await notify({ status: "failed", name: seen.name || "@zohocrm/crm-ui-library", version: seen.version || "", tag: b.tag,
-        branch: b.branch, commit: seen.commit || "", commits: seen.commits || [], error: err.message });
+        branch: b.branch, commit: seen.commit || "", commits: [...new Set((seen.commits || []).concat(b.republish || []))], error: err.message });
 }
 
 // ── one publisher at a time ────────────────────────────────────────────────
@@ -250,8 +311,12 @@ async function tick() {
     if (busy) return;
     busy = true;
     try {
+        const asked = await republishRequests();
         for (const b of BRANCHES) {
             b.seen = null;
+            b.republish = asked[b.branch] || [];
+            // An admin asked again: report this run's result even when the error is the one already mailed.
+            if (b.republish.length) { log(`${b.branch}: re-publish asked for ${b.republish.length} request(s)`); forgetFailures(b.branch); }
             try { await releaseBranch(b); }
             catch (e) { log(`${b.branch}: ${e.message}`); await reportFailure(b, e); }
         }

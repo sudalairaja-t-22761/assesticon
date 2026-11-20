@@ -27,6 +27,9 @@
  *                                         commits = the icon commits in that release: their requests get the result in the timeline
  *                                         mail every admin (+ RELEASE_NOTIFY_EMAILS) the publish result. Called by
  *                                         scripts/npm-publisher.js; header x-release-token = RELEASE_NOTIFY_TOKEN
+ *   GET    /api/release/republish       → { branches: { <branch>: [commitSha] } }  the re-publishes admins asked for; polled by
+ *                                         scripts/npm-publisher.js (same x-release-token), which answers through /release/published
+ *   POST   /api/requests/:id/republish  → admin asks the npm publisher to publish a pushed request again            [admin]
  *   POST   /api/requests                → { symbolId, iconName, svg, targetSprite, note, stage?, inMock? }; the Visual audit approvers are mailed first
  *                                         stage "mock" (default): an unverified icon; stage "master": a mock verified icon
  *   GET    /api/requests                → admins see all; others see requested-by-me + assigned-to-me
@@ -750,13 +753,30 @@ function createWorkflowRouter({ requireSession, repos }) {
 
     // ── release published (from scripts/npm-publisher.js, which runs inside the office network) ──
     // No session: the publisher authenticates with the shared RELEASE_NOTIFY_TOKEN instead.
-    router.post("/release/published", wrap(async (req, res) => {
+    function releaseToken(req, res, next) {
         const want = String(process.env.RELEASE_NOTIFY_TOKEN || "");
         const got = String(req.headers["x-release-token"] || "");
         if (want.length < 24) return res.status(503).json({ success: false, message: "RELEASE_NOTIFY_TOKEN is not set on the server" });
         if (got.length !== want.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want))) {
             return res.status(401).json({ success: false, message: "Invalid release token" });
         }
+        next();
+    }
+    const branchOf = (r) => (repos && repos[stageOf(r)] && repos[stageOf(r)].branch) || "";
+
+    // The re-publishes admins asked for (releaseStatus "requested"), per branch: the publisher polls this every run,
+    // publishes (or looks up the version the commit is already in) and answers through /release/published.
+    router.get("/release/republish", releaseToken, wrap(async (req, res) => {
+        const branches = {};
+        for (const q of await store.forRequest(req).all("icon_requests")) {
+            const sha = String(q.pushCommitSha || "").toLowerCase(), branch = branchOf(q);
+            if (q.status !== "pushed" || q.releaseStatus !== "requested" || !branch || !/^[0-9a-f]{7,64}$/.test(sha)) continue;
+            if (!(branches[branch] = branches[branch] || []).includes(sha)) branches[branch].push(sha);
+        }
+        res.json({ success: true, branches });
+    }));
+
+    router.post("/release/published", releaseToken, wrap(async (req, res) => {
         const b = req.body || {};
         const status = b.status === "failed" ? "failed" : "published";
         const r = { status, name: str(b.name, 120), version: str(b.version, 60), tag: str(b.tag, 40), branch: str(b.branch, 120),
@@ -783,7 +803,7 @@ function createWorkflowRouter({ requireSession, repos }) {
             const db = store.forRequest(req);
             const inRelease = (sha) => { const s = String(sha || "").toLowerCase(); return s.length >= 7 && commits.some((c) => c.startsWith(s) || s.startsWith(c)); };
             for (const q of (await db.all("icon_requests")).filter((x) => x.status === "pushed" && inRelease(x.pushCommitSha))) {
-                if (status === "published" && q.releaseStatus === "published") continue; // already recorded
+                if (q.releaseStatus === "published") continue; // already recorded (a later failure is about newer icons)
                 await db.update("icon_requests", q.ROWID, { releaseStatus: status, releaseVersion: r.version, releaseTag: r.tag, releaseError: status === "failed" ? r.error.slice(0, 500) : "" });
                 await db.insert("request_events", { requestId: String(q.ROWID), actor: "npm publisher", action: status === "published" ? "npm_published" : "npm_publish_failed",
                     note: status === "published" ? `${r.name}@${r.version} · tag ${r.tag}` : `${r.version || "version not set"}: ${r.error.slice(0, 400)}` });
@@ -1027,6 +1047,20 @@ function createWorkflowRouter({ requireSession, repos }) {
         const request = await recordPush(req, store.forRequest(req), actorOf(req), req.params.id,
             { commitSha: b.commitSha, drawing: b.drawing, version: b.version, alreadyThere: !!b.alreadyThere });
         res.json({ success: true, request });
+    }));
+
+    // Admin asks for the npm publish of a pushed request again (it failed, or no result ever came back). The office
+    // npm publisher picks it up on its next run; the result lands on the request like every other publish result.
+    router.post("/requests/:id/republish", requireRole(["admin"]), wrap(async (req, res) => {
+        const db = store.forRequest(req);
+        const r = await findRequest(db, req.params.id);
+        if (r.status !== "pushed") throw fail(409, "Only a pushed request can be published again");
+        if (r.releaseStatus === "published") throw fail(409, `Already published${r.releaseVersion ? " in " + r.releaseVersion : ""}`);
+        if (!/^[0-9a-f]{7,64}$/i.test(String(r.pushCommitSha || ""))) throw fail(409, "This request has no commit of its own (the icon was already on the branch), so there is nothing to publish");
+        if (!branchOf(r)) throw fail(503, "The repository branch of this request is not configured on this server");
+        const saved = await db.update("icon_requests", r.ROWID, { releaseStatus: "requested", releaseError: "", republishAt: new Date().toISOString(), republishBy: me(req).email || "" });
+        await logEvent(db, r.ROWID, actorOf(req), "npm_republish_requested", r.releaseError ? `after: ${str(r.releaseError, 300)}` : "");
+        res.json({ success: true, request: saved || { ...r, releaseStatus: "requested" } });
     }));
 
     // Admin turns down a master request after both audits passed: the icon stays mock verified.

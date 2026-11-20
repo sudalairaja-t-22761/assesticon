@@ -27,7 +27,7 @@ const MAX_IMAGE = 3 * 1024 * 1024;
 const MAX_TEXT = 3000;
 const MAX_RECIPIENTS = 25;
 // People a user can message on Cliq about a problem (BUG_CONTACTS="a@x.com,b@x.com" overrides the list).
-const CONTACTS = ["sudalairaja.t@zohocorp.com", "earnest.j@zohocorp.com", "vishal.cb@zohocorp.com"];
+const CONTACTS = ["earnest.j@zohocorp.com", "sudalairaja.t@zohocorp.com", "vishal.cb@zohocorp.com"];
 const str = (v, max) => String(v == null ? "" : v).slice(0, max || 500);
 const isEmail = (e) => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e);
 
