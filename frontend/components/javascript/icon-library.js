@@ -30,6 +30,7 @@
     icons: [],        // combined list: repository sprite icons + user Library icons
     userIcons: [],    // uploaded Library icons (server + localStorage)
     repoIcons: [],    // exploded from the repository sprites (repo-library-icons.js)
+    personalIcons: [], // gradient icons the signed-in user saved from the Gradient SVG Icons page
     sourceFilter: 'all', // 'all' | 'mine' | '<sprite base name>'
     search: '',
     sort: (function () { try { return localStorage.getItem('sf_lib_sort') || 'newest'; } catch (e) { return 'newest'; } })(),
@@ -38,8 +39,8 @@
   };
 
   function rebuildLibraryIcons() {
-    // The Library shows only the icons of the Iconassest repo sprite (uploaded/local icons are not listed).
-    SF.libState.icons = (SF.libState.repoIcons || []).slice();
+    // The Library shows the Iconassest repo sprite icons plus the signed-in user's own personal icons.
+    SF.libState.icons = (SF.libState.repoIcons || []).concat(SF.libState.personalIcons || []);
     pruneSelected();
   }
 
@@ -777,6 +778,35 @@
       return;
     }
 
+    // Personal gradient icons (server, owner only)
+    if (icon.source === 'personal') {
+      $.ajax({
+        url: joinUrl(CATALYST_API_BASE, 'api/personal-icons/' + encodeURIComponent(icon.personalId)),
+        type: 'DELETE',
+        headers: hostedAuthHeaders(),
+        dataType: 'json',
+        success: function (res) {
+          if (res && res.success) {
+            SF.showToast('Icon removed from Library');
+            SF.loadPersonalIcons();
+            if (typeof done === 'function') done(true);
+          } else {
+            SF.showToast('Delete failed: ' + ((res && res.message) || 'could not delete icon'));
+            if (typeof done === 'function') done(false);
+          }
+        },
+        error: function (xhr) {
+          if (handleHostedUnauthorized(xhr, 'Session expired while deleting. Sign in and try again.')) {
+            if (typeof done === 'function') done(false);
+            return;
+          }
+          SF.showToast('Delete failed: ' + ((xhr && xhr.responseJSON && xhr.responseJSON.message) || 'could not delete icon'));
+          if (typeof done === 'function') done(false);
+        }
+      });
+      return;
+    }
+
     // localStorage-only icons
     if (icon.source === 'local' || String(icon.id || '').indexOf('ls:') === 0) {
       removeLsIconById(icon.id);
@@ -896,8 +926,61 @@
       }
     });
 
+    SF.loadPersonalIcons();
+
     // Both repository sprites, split into single icons (read straight from the repo).
     if (typeof SF.loadRepoLibraryIcons === 'function') SF.loadRepoLibraryIcons(false);
+  };
+
+  // ── Personal gradient icons (GET/POST/DELETE api/personal-icons) ─────────
+  function personalIconItems(list) {
+    return (list || []).map(function (item) {
+      return {
+        id:         'pg:' + item.id,
+        personalId: item.id,
+        name:       item.name || 'icon',
+        svgContent: item.svgContent || '',
+        size:       (item.svgContent || '').length,
+        gradientStyle: item.gradientStyle || '',
+        createdAt:  item.createdAt || '',
+        canDelete:  true,
+        source:     'personal'
+      };
+    });
+  }
+
+  SF.loadPersonalIcons = function () {
+    $.ajax({
+      url: joinUrl(CATALYST_API_BASE, 'api/personal-icons'),
+      type: 'GET',
+      dataType: 'json',
+      headers: hostedAuthHeaders(),
+      success: function (data) {
+        SF.libState.personalIcons = personalIconItems((data && data.icons) || []);
+        rebuildLibraryIcons();
+        SF.renderLibraryGrid();
+      },
+      error: function (xhr) {
+        handleHostedUnauthorized(xhr, 'Session expired. Sign in with Zoho to load your personal icons.');
+      }
+    });
+  };
+
+  SF.savePersonalIcon = function (name, svgContent, gradientStyle) {
+    return $.ajax({
+      url: joinUrl(CATALYST_API_BASE, 'api/personal-icons'),
+      type: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify({ name: name, svgContent: svgContent, gradientStyle: gradientStyle }),
+      dataType: 'json',
+      headers: hostedAuthHeaders()
+    }).then(function (res) {
+      if (res && res.success) SF.loadPersonalIcons();
+      return res;
+    }, function (xhr) {
+      handleHostedUnauthorized(xhr, 'Session expired while saving. Sign in and try again.');
+      return $.Deferred().reject(xhr && xhr.responseJSON && xhr.responseJSON.message || 'Could not save icon').promise();
+    });
   };
 
   function renderSourceFilter() {

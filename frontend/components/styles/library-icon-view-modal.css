@@ -1,7 +1,12 @@
 /* ============================================================
    ICON LIBRARY — eye button preview popup (library-icon-view-modal.js)
    ============================================================ */
-.modal.lvm-modal { width: 780px; max-height: 88vh; }
+.modal.lvm-modal {
+  display: flex; flex-direction: column;
+  width: 1080px; max-width: 94vw;
+  height: 88vh; max-height: 94vh;
+}
+.lvm-modal .modal-body { flex: 1; min-height: 0; }
 .lvm-modal .modal-header h3 { min-width: 0; }
 #lvmTitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lvm-sub { font-size: 12px; font-weight: 400; color: var(--text-tertiary); white-space: nowrap; }
@@ -9,7 +14,7 @@
 .lvm-body { display: flex; flex-direction: column; gap: 18px; }
 .lvm-top { display: flex; gap: 18px; align-items: stretch; }
 .lvm-stage {
-  flex: 0 0 220px; height: 220px;
+  flex: 0 0 300px; height: 300px;
   display: flex; align-items: center; justify-content: center;
   border: 1px solid var(--border-light); border-radius: var(--radius);
   background-color: #fff;
@@ -18,7 +23,7 @@
     linear-gradient(45deg, #eef0f3 25%, transparent 25%, transparent 75%, #eef0f3 75%);
   background-size: 16px 16px; background-position: 0 0, 8px 8px;
 }
-.lvm-stage img, .lvm-stage .lvm-svg { width: 128px; height: 128px; object-fit: contain; }
+.lvm-stage img, .lvm-stage .lvm-svg { width: 192px; height: 192px; object-fit: contain; }
 .lvm-svg { display: block; flex: none; }   /* inline <svg> in a shadow root (library-icon-view-modal.js) */
 .lvm-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .lvm-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-tertiary); }
@@ -79,7 +84,8 @@
 
 @media (max-width: 640px) {
   .lvm-top { flex-direction: column; }
-  .lvm-stage { flex-basis: auto; height: 180px; }
+  .lvm-stage { flex-basis: auto; height: 220px; }
+  .modal.lvm-modal { height: 92vh; }
 }
 
 /* Looking at a suggestion: its tile is marked, and the header offers the way back to the icon first opened. */
@@ -89,3 +95,7 @@
   border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-panel); color: var(--accent-text);
 }
 .lvm-back:hover { border-color: var(--accent); }
+
+/* Gradient editor mounted inside the popup; its own .gsi styles come from svg-gradient-svg-icons.css. */
+.lvm-grad { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.lvm-grad .gsi { padding: 0; }

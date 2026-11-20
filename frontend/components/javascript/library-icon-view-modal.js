@@ -250,10 +250,13 @@
                 '<div class="lvm-meta" id="lvmMeta"></div>' +
                 '<div class="lvm-actions">' +
                   '<button type="button" class="btn btn-ghost btn-sm" id="lvmCopySvg">Copy SVG</button>' +
+                  '<button type="button" class="btn btn-ghost btn-sm" id="lvmDownload" title="Download the SVG file">Download SVG</button>' +
+                  '<button type="button" class="btn btn-ghost btn-sm" id="lvmGradient" aria-expanded="false" title="Apply a gradient to this icon">Apply gradient</button>' +
                   '<button type="button" class="btn btn-ghost btn-sm" id="lvmCustomize" title="Colour, size and stroke width">Customize</button>' +
                 '</div>' +
               '</div>' +
             '</div>' +
+            '<div class="lvm-grad hidden" id="lvmGrad"></div>' +
             '<div class="lvm-section">' +
               '<div class="lvm-section-head">Similar icons <span class="lvm-hint">similar name, or drawing at least ' + Math.round(VISUAL_MIN * 100) + '% similar</span></div>' +
               '<div class="lvm-status" id="lvmSimStatus"></div>' +
@@ -339,7 +342,7 @@
       (w && h ? '<span>Size <b>' + esc(Math.round(w * 100) / 100) + ' × ' + esc(Math.round(h * 100) / 100) + '</b></span>' : '') +
       (icon.source === 'repo' ? '<span>Source <b>repository</b></span>' : '') +
       (cats.length ? '<span>Category <b>' + esc(cats.join(', ')) + '</b></span>' : ''));
-    $('#lvmCopySvg').prop('disabled', !svg);
+    $('#lvmCopySvg, #lvmDownload, #lvmGradient').prop('disabled', !svg);
     var away = origin && origin.id !== icon.id;
     $('#lvmBack').toggleClass('hidden', !away).text(away ? '← Back to ' + baseName(origin) : '');
     $('#lvmSimilar .lvm-tile').each(function () { $(this).toggleClass('is-active', $(this).data('iconId') === icon.id); });
@@ -536,12 +539,14 @@
     current = icon;
     renderHead(icon);
     $('#libViewModal .lvm-body').scrollTop(0);
+    if (gradientOpen()) openGradient(icon);
   }
 
   function show(icon) {
     current = origin = icon;
     var id = ++runId;
     renderHead(icon);
+    closeGradient();
     $('#libViewModal .lvm-body').scrollTop(0);
     loadSimilar(icon, id);
     loadArt(icon, id);
@@ -563,6 +568,7 @@
   }
   function close() {
     current = origin = null; runId++;
+    closeGradient();
     $('#libViewModal').addClass('hidden');
     document.removeEventListener('keydown', onKey, true);
   }
@@ -589,6 +595,36 @@
   $(document).on('click', '#lvmClose, #lvmBg', close);
   $(document).on('click', '#lvmCopyCode', function () { copy($('#lvmCode').text(), 'Copied'); });
   $(document).on('click', '#lvmCopySvg', function () { if (current) copy(svgOf(current), 'SVG copied'); });
+  // Same file name rule as the Gradient SVG Icons page: lowercase, letters/digits/-/_ only, ".svg".
+  $(document).on('click', '#lvmDownload', function () {
+    if (!current || !svgOf(current)) return;
+    var base = String(baseName(current)).replace(/\.svg$/i, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'icon';
+    var url = URL.createObjectURL(new Blob([svgOf(current)], { type: 'image/svg+xml' }));
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = base + '.svg';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  });
+  // The gradient editor (svg-gradient-svg-icons.js) mounts inside the popup for the icon on screen.
+  function openGradient(icon) {
+    var svg = svgOf(icon);
+    if (!svg || !SF.mountGradientEditor) return closeGradient();
+    $('#lvmGrad').removeClass('hidden');
+    $('#lvmGradient').text('Hide gradient').attr('aria-expanded', 'true');
+    SF.mountGradientEditor($('#lvmGrad')[0], svg, baseName(icon));
+  }
+  function closeGradient() {
+    $('#lvmGrad').addClass('hidden').empty();
+    $('#lvmGradient').text('Apply gradient').attr('aria-expanded', 'false');
+  }
+  function gradientOpen() { return !$('#lvmGrad').hasClass('hidden'); }
+  $(document).on('click', '#lvmGradient', function () {
+    if (!current) return;
+    if (gradientOpen()) closeGradient(); else openGradient(current);
+  });
   $(document).on('click', '#lvmCustomize', function () {
     var id = current && current.id;
     close();

@@ -798,6 +798,82 @@ async function spWriteIndex(req, index) {
 }
 
 // ===================================
+// PERSONAL GRADIENT ICONS — saved from the Gradient SVG Icons page, visible only to the user who saved them.
+// GET /api/personal-icons · POST /api/personal-icons · DELETE /api/personal-icons/:id
+// One JSON index (Stratus key or local file); each entry carries its SVG markup.
+// ===================================
+const PI_INDEX_KEY   = "personalicons/_index.json";
+const LOCAL_PI_INDEX = path.join(os.tmpdir(), "svgforge-personal-icons.json");
+const PI_MAX_SVG_CHARS = 1000000;
+function piLocalRead() { try { return JSON.parse(fs.readFileSync(LOCAL_PI_INDEX, "utf8")); } catch (_) { return { entries: [] }; } }
+function piLocalWrite(idx) { fs.writeFileSync(LOCAL_PI_INDEX, JSON.stringify(idx), "utf8"); }
+async function piRead(req) {
+    if (!shouldUseStratus(req)) return piLocalRead();
+    try { return JSON.parse((await stratusGet(req, PI_INDEX_KEY)).toString("utf8")); }
+    catch (_) { return { entries: [] }; }
+}
+async function piWrite(req, idx) {
+    if (!shouldUseStratus(req)) return piLocalWrite(idx);
+    await stratusPut(req, PI_INDEX_KEY, Buffer.from(JSON.stringify(idx), "utf8"), "application/json");
+}
+const piOwnerKey = (req) => { const o = spOwnerOf(req); return o ? o.email : ""; };
+
+app.get("/api/personal-icons", async (req, res) => {
+    try {
+        const owner = piOwnerKey(req);
+        const idx = await piRead(req);
+        return res.json({ success: true, icons: (idx.entries || []).filter(e => e.owner === owner) });
+    } catch (err) {
+        console.error("[personal-icons] list", err);
+        return res.status(500).json({ success: false, message: err.message || "Could not load your icons" });
+    }
+});
+
+app.post("/api/personal-icons", async (req, res) => {
+    try {
+        const { name, svgContent, gradientStyle } = req.body || {};
+        const cleanName = String(name || "").trim().slice(0, 80);
+        if (!cleanName || !svgContent) {
+            return res.status(400).json({ success: false, message: "Missing name or svgContent" });
+        }
+        if (String(svgContent).length > PI_MAX_SVG_CHARS) {
+            return res.status(413).json({ success: false, message: "SVG is too large to save" });
+        }
+        const entry = {
+            id:            crypto.randomBytes(8).toString("hex"),
+            name:          cleanName,
+            gradientStyle: String(gradientStyle || "").slice(0, 40),
+            svgContent:    String(svgContent),
+            owner:         piOwnerKey(req),
+            createdAt:     new Date().toISOString()
+        };
+        const idx = await piRead(req);
+        idx.entries = [entry].concat(idx.entries || []);
+        await piWrite(req, idx);
+        return res.json({ success: true, icon: entry });
+    } catch (err) {
+        console.error("[personal-icons] save", err);
+        return res.status(500).json({ success: false, message: err.message || "Save failed" });
+    }
+});
+
+app.delete("/api/personal-icons/:id", async (req, res) => {
+    try {
+        const owner = piOwnerKey(req);
+        const idx = await piRead(req);
+        const entries = idx.entries || [];
+        const target = entries.find(e => e.id === req.params.id && e.owner === owner);
+        if (!target) return res.status(404).json({ success: false, message: "Not found" });
+        idx.entries = entries.filter(e => e !== target);
+        await piWrite(req, idx);
+        return res.json({ success: true });
+    } catch (err) {
+        console.error("[personal-icons] delete", err);
+        return res.status(500).json({ success: false, message: err.message || "Delete failed" });
+    }
+});
+
+// ===================================
 // MASTER UI LIBRARY — CRM_UI_LIBRARY icon files read DIRECTLY from the repository
 // (2 sprites + 2 LESS), cached in memory only — nothing is stored in Stratus.
 // Visible to every signed-in user; saves are committed + pushed to REPO_BRANCH.

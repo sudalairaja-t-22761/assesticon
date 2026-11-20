@@ -2601,7 +2601,7 @@
       // Restore last active sidebar page across refresh
       (function () {
         var validPages = ['generator', 'helpdoc', 'iconlibrary', 'mostused', 'requesticon',
-                          'savedsprites', 'webfont', 'savedwebfonts', 'createsvg', 'wfrequests', 'wfmembers'];
+                          'savedsprites', 'webfont', 'gradientsvg', 'savedwebfonts', 'createsvg', 'wfrequests', 'wfmembers'];
         var lastPage = null;
         try { lastPage = localStorage.getItem('sf_active_page'); } catch (e) {}
         if (lastPage && validPages.indexOf(lastPage) !== -1) {

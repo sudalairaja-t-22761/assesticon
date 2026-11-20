@@ -1,0 +1,136 @@
+<div class="content hidden" id="gradientSvgPage">
+  <div class="gsi">
+
+    <!-- LEFT: upload, gradient presets, customisation -->
+    <div class="gsi-col">
+      <div class="panel">
+        <div class="panel-header">
+          <h3 class="panel-title">1 · Upload SVG</h3>
+        </div>
+        <div class="panel-body">
+          <div class="gsi-drop" id="gsiDrop" role="button" tabindex="0" aria-label="Upload an SVG icon. Drop a file here or press Enter to browse.">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <div class="gsi-drop-text"><strong>Drop an SVG here</strong> or click to browse</div>
+            <div class="gsi-hint">.svg files up to 1 MB</div>
+          </div>
+          <input type="file" id="gsiFile" accept=".svg,image/svg+xml" hidden>
+          <div class="gsi-status" id="gsiStatus" role="status" aria-live="polite"></div>
+          <div class="gsi-file hidden" id="gsiFileRow">
+            <span class="gsi-file-name" id="gsiFileName"></span>
+            <button type="button" class="btn btn-ghost btn-sm" id="gsiRemove">Remove</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="gsi-main is-locked" id="gsiMain">
+        <div class="panel">
+          <div class="panel-header">
+            <h3 class="panel-title">2 · Gradient style</h3>
+          </div>
+          <div class="panel-body">
+            <div class="gsi-presets" id="gsiPresets"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h3 class="panel-title">3 · Customise</h3>
+            <div class="panel-actions">
+              <button type="button" class="btn btn-ghost btn-sm" id="gsiReset">Reset to default</button>
+            </div>
+          </div>
+          <div class="panel-body gsi-custom">
+            <div class="gsi-row" id="gsiAngleRow">
+              <label class="gsi-label" for="gsiAngle">Angle</label>
+              <input type="range" id="gsiAngle" class="gsi-range" min="0" max="360" step="1">
+              <input type="number" id="gsiAngleNum" class="gsi-input gsi-num" min="0" max="360" step="1" aria-label="Angle in degrees">
+            </div>
+            <div class="gsi-row">
+              <label class="gsi-label" for="gsiOpacity">Opacity</label>
+              <input type="range" id="gsiOpacity" class="gsi-range" min="0" max="100" step="1">
+              <input type="number" id="gsiOpacityNum" class="gsi-input gsi-num" min="0" max="100" step="1" aria-label="Opacity in percent">
+            </div>
+            <div class="gsi-stops-head">
+              <span class="gsi-label">Colour stops <span class="gsi-hint">2 to 8 stops · position 0–100%</span></span>
+              <button type="button" class="btn btn-ghost btn-sm" id="gsiAddStop">+ Add stop</button>
+            </div>
+            <div class="gsi-stops" id="gsiStops"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: live preview, SVG code, download and save -->
+    <div class="gsi-col">
+      <div class="panel">
+        <div class="panel-header">
+          <h3 class="panel-title">4 · Live preview</h3>
+          <div class="panel-actions gsi-sizes" role="group" aria-label="Preview size">
+            <button type="button" class="btn btn-ghost btn-sm gsi-size" data-size="24">24</button>
+            <button type="button" class="btn btn-ghost btn-sm gsi-size" data-size="32">32</button>
+            <button type="button" class="btn btn-ghost btn-sm gsi-size" data-size="48">48</button>
+            <button type="button" class="btn btn-ghost btn-sm gsi-size" data-size="64">64</button>
+            <button type="button" class="btn btn-ghost btn-sm gsi-size" data-size="96">96</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="gsi-empty" id="gsiEmpty">Upload an SVG icon to see the gradient preview.</div>
+          <div class="gsi-compare hidden" id="gsiCompare" style="--gsi-size: 64px">
+            <div class="gsi-compare-col">
+              <div class="gsi-tile-label">Light background</div>
+              <div class="gsi-tile gsi-tile-light">
+                <img id="gsiImgOrigLight" class="gsi-img" alt="Original icon on light background">
+                <span class="gsi-tile-tag">Original</span>
+              </div>
+              <div class="gsi-tile gsi-tile-light">
+                <img id="gsiImgGradLight" class="gsi-img" alt="Gradient icon on light background">
+                <span class="gsi-tile-tag">Gradient</span>
+              </div>
+            </div>
+            <div class="gsi-compare-col">
+              <div class="gsi-tile-label">Dark background</div>
+              <div class="gsi-tile gsi-tile-dark">
+                <img id="gsiImgOrigDark" class="gsi-img" alt="Original icon on dark background">
+                <span class="gsi-tile-tag">Original</span>
+              </div>
+              <div class="gsi-tile gsi-tile-dark">
+                <img id="gsiImgGradDark" class="gsi-img" alt="Gradient icon on dark background">
+                <span class="gsi-tile-tag">Gradient</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <h3 class="panel-title">5 · SVG code</h3>
+          <div class="panel-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="gsiCopy" disabled>Copy code</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <pre class="gsi-code"><code id="gsiCode"></code></pre>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <h3 class="panel-title">6 · Download &amp; save</h3>
+        </div>
+        <div class="panel-body gsi-actions">
+          <label class="gsi-label" for="gsiName">Icon name</label>
+          <input type="text" id="gsiName" class="gsi-input" maxlength="80" placeholder="Enter an icon name" autocomplete="off" spellcheck="false">
+          <div class="gsi-action-buttons">
+            <button type="button" class="btn btn-primary" id="gsiDownload" disabled>Download SVG</button>
+            <button type="button" class="btn" id="gsiAddLib" disabled>Add to Library</button>
+          </div>
+          <div class="gsi-hint">The name is used for the downloaded file and for the icon in your Icon Library. Your original file is never changed.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
