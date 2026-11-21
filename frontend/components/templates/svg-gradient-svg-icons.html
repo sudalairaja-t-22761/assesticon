@@ -8,6 +8,11 @@
           <h3 class="panel-title">1 · Upload SVG</h3>
         </div>
         <div class="panel-body">
+          <div class="gsi-tabs" role="tablist" aria-label="Upload source">
+            <button type="button" class="gsi-tab is-active" id="gsiTabSvg" role="tab" aria-selected="true" aria-controls="gsiPaneSvg">SVG file</button>
+            <button type="button" class="gsi-tab" id="gsiTabImg" role="tab" aria-selected="false" aria-controls="gsiPaneImg">Image to SVG</button>
+          </div>
+          <div id="gsiPaneSvg" role="tabpanel">
           <div class="gsi-drop" id="gsiDrop" role="button" tabindex="0" aria-label="Upload an SVG icon. Drop a file here or press Enter to browse.">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
@@ -20,6 +25,35 @@
           <div class="gsi-file hidden" id="gsiFileRow">
             <span class="gsi-file-name" id="gsiFileName"></span>
             <button type="button" class="btn btn-ghost btn-sm" id="gsiRemove">Remove</button>
+          </div>
+          </div>
+          <div id="gsiPaneImg" class="hidden" role="tabpanel">
+            <div class="gsi-drop" id="gsiImgDrop" role="button" tabindex="0" aria-label="Upload an image. Drop a PNG, JPG, WebP or other image here or press Enter to browse.">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+              </svg>
+              <div class="gsi-drop-text"><strong>Drop an image here</strong> or click to browse</div>
+              <div class="gsi-hint">PNG, JPG, WebP, GIF and other image formats up to 5 MB</div>
+            </div>
+            <input type="file" id="gsiImgFile" accept="image/*" hidden>
+            <div class="gsi-trace">
+              <div class="gsi-trace-row">
+                <label class="gsi-label" for="gsiImgThreshold">Threshold <output id="gsiImgThresholdOut">50</output>%</label>
+                <input type="range" id="gsiImgThreshold" min="5" max="95" value="50">
+              </div>
+              <div class="gsi-trace-row">
+                <label class="gsi-label" for="gsiImgDetail">Detail</label>
+                <select id="gsiImgDetail">
+                  <option value="96">Low</option>
+                  <option value="192" selected>Medium</option>
+                  <option value="320">High</option>
+                </select>
+              </div>
+              <label class="gsi-check"><input type="checkbox" id="gsiImgInvert"> Icon is lighter than its background (invert)</label>
+              <p class="gsi-hint">Transparent images are traced from their visible shape, so the icon colour doesn't matter. For an opaque image, tick the box if the icon is lighter than its background.</p>
+              <button type="button" class="btn btn-ghost btn-sm" id="gsiImgRetrace" disabled>Re-trace last image</button>
+            </div>
+            <div class="gsi-status" id="gsiImgStatus" role="status" aria-live="polite"></div>
           </div>
         </div>
       </div>
@@ -42,6 +76,14 @@
             </div>
           </div>
           <div class="panel-body gsi-custom">
+            <div class="gsi-targets hidden" id="gsiTargetRow">
+              <div class="gsi-stops-head">
+                <span class="gsi-label">Apply to <span class="gsi-hint">click a shape below, or pick from the list</span></span>
+                <button type="button" class="btn btn-ghost btn-sm" id="gsiTargetReset" disabled>Match whole icon</button>
+              </div>
+              <div class="gsi-pick" id="gsiPick" aria-label="Click a shape to style it"></div>
+              <div class="gsi-chips" id="gsiTargets" role="group" aria-label="Gradient target"></div>
+            </div>
             <div class="gsi-row" id="gsiAngleRow">
               <label class="gsi-label" for="gsiAngle">Angle</label>
               <input type="range" id="gsiAngle" class="gsi-range" min="0" max="360" step="1">

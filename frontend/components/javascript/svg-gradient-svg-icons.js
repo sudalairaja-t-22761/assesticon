@@ -14,6 +14,7 @@
 
   const PAGE = 'gradientsvg';
   const MAX_BYTES = 1024 * 1024;
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
   const MAX_STOPS = 8;
   const MIN_STOPS = 2;
   const SIZES = [24, 32, 48, 64, 96];
@@ -39,6 +40,85 @@
     { id: 'multi', label: 'Multi-Color Gradient', type: 'linear', angle: 45, stops: [S('#ef4444', 0), S('#f59e0b', 33), S('#10b981', 66), S('#3b82f6', 100)] },
     { id: 'duotone', label: 'Duotone Gradient', type: 'linear', angle: 45, stops: [S('#7c3aed', 0), S('#7c3aed', 50), S('#06b6d4', 50), S('#06b6d4', 100)] }
   ];
+
+  // ── image → SVG tracing ───────────────────────────────────────────────
+  /**
+   * Traces a binary mask (1 = ink) into one SVG path per connected shape. Each path's outline runs along pixel edges;
+   * holes are kept with fill-rule="evenodd".
+   */
+  function traceMask(mask, W, H) {
+    const comp = new Int32Array(W * H).fill(-1);
+    let count = 0;
+    const stack = [];
+    for (let i = 0; i < W * H; i++) {
+      if (!mask[i] || comp[i] !== -1) continue;
+      comp[i] = count;
+      stack.push(i);
+      while (stack.length) {
+        const j = stack.pop();
+        const x = j % W, y = (j - x) / W;
+        if (x > 0 && mask[j - 1] && comp[j - 1] === -1) { comp[j - 1] = count; stack.push(j - 1); }
+        if (x < W - 1 && mask[j + 1] && comp[j + 1] === -1) { comp[j + 1] = count; stack.push(j + 1); }
+        if (y > 0 && mask[j - W] && comp[j - W] === -1) { comp[j - W] = count; stack.push(j - W); }
+        if (y < H - 1 && mask[j + W] && comp[j + W] === -1) { comp[j + W] = count; stack.push(j + W); }
+      }
+      count++;
+    }
+
+    const VW = W + 1;
+    const edges = [];
+    for (let c = 0; c < count; c++) edges.push(new Map());
+    function addEdge(map, from, to) {
+      if (!map.has(from)) map.set(from, []);
+      map.get(from).push(to);
+    }
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (!mask[i]) continue;
+        const m = edges[comp[i]];
+        const tl = y * VW + x, tr = tl + 1, bl = tl + VW, br = bl + 1;
+        if (y === 0 || !mask[i - W]) addEdge(m, tl, tr);
+        if (x === W - 1 || !mask[i + 1]) addEdge(m, tr, br);
+        if (y === H - 1 || !mask[i + W]) addEdge(m, br, bl);
+        if (x === 0 || !mask[i - 1]) addEdge(m, bl, tl);
+      }
+    }
+
+    const paths = [];
+    edges.forEach(function (m) {
+      let d = '';
+      while (m.size) {
+        const first = m.keys().next().value;
+        const ring = [first];
+        let cur = first;
+        do {
+          const outs = m.get(cur);
+          const next = outs.pop();
+          if (!outs.length) m.delete(cur);
+          ring.push(next);
+          cur = next;
+        } while (cur !== first);
+        ring.pop();
+        const pts = ring.map(function (v) { return { x: v % VW, y: (v - (v % VW)) / VW }; });
+        const keep = pts.filter(function (p, k) {
+          const a = pts[(k - 1 + pts.length) % pts.length], b = pts[(k + 1) % pts.length];
+          return (p.x - a.x) * (b.y - p.y) - (p.y - a.y) * (b.x - p.x) !== 0;
+        });
+        if (keep.length < 3) continue;
+        d += 'M' + keep[0].x + ' ' + keep[0].y + keep.slice(1).map(function (p) { return 'L' + p.x + ' ' + p.y; }).join('') + 'Z';
+      }
+      if (d) paths.push(d);
+    });
+    return paths;
+  }
+
+  function buildTracedSvg(paths, W, H) {
+    const body = paths.map(function (d) {
+      return '  <path fill="#000000" fill-rule="evenodd" d="' + d + '"/>';
+    }).join('\n');
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '">\n' + body + '\n</svg>';
+  }
 
   /**
    * One gradient editor, mounted in `root`. `prefix` is added to the ids in its markup, so an editor can share the
@@ -67,7 +147,12 @@
     size: 64,
     output: '',
     nameTouched: false,
-    busy: false
+    busy: false,
+    // Per-path gradients: `shared` is the whole-icon spec, `specs[n]` overrides it for target n,
+    // and `sel` is the target being edited (-1 means the whole icon).
+    shared: null,
+    specs: {},
+    sel: -1
   };
 
   function presetById(id) { return PRESETS.filter(function (x) { return x.id === id; })[0] || PRESETS[0]; }
@@ -173,12 +258,56 @@
   }
 
   // ── output ─────────────────────────────────────────────────────────────
-  function linearCoords(vb) {
+  function linearCoords(vb, angle) {
     const cx = vb[0] + vb[2] / 2, cy = vb[1] + vb[3] / 2;
-    const rad = state.angle * Math.PI / 180;
+    const rad = angle * Math.PI / 180;
     const dx = Math.cos(rad), dy = Math.sin(rad);
     const half = (Math.abs(dx) * vb[2] + Math.abs(dy) * vb[3]) / 2;
     return { x1: cx - dx * half, y1: cy - dy * half, x2: cx + dx * half, y2: cy + dy * half };
+  }
+
+  function specOf() {
+    return { preset: state.preset, type: state.type, angle: state.angle, opacity: state.opacity, stops: clone(state.stops) };
+  }
+
+  function loadSpec(spec) {
+    state.preset = spec.preset;
+    state.type = spec.type;
+    state.angle = spec.angle;
+    state.opacity = spec.opacity;
+    state.stops = clone(spec.stops);
+    renderCustomControls();
+  }
+
+  /** The spec a target uses: its own override, or the whole-icon spec. */
+  function specFor(n) {
+    return state.specs[n] || state.shared;
+  }
+
+  function gradientFor(doc, id, spec, vb) {
+    const gradTag = spec.type === 'radial' ? 'radialGradient' : 'linearGradient';
+    const grad = doc.createElementNS(SVG_NS, gradTag);
+    grad.setAttribute('id', id);
+    grad.setAttribute('gradientUnits', 'userSpaceOnUse');
+    if (spec.type === 'radial') {
+      grad.setAttribute('cx', r2(vb[0] + vb[2] / 2));
+      grad.setAttribute('cy', r2(vb[1] + vb[3] / 2));
+      grad.setAttribute('r', r2(Math.hypot(vb[2], vb[3]) / 2));
+    } else {
+      const c = linearCoords(vb, spec.angle);
+      grad.setAttribute('x1', r2(c.x1)); grad.setAttribute('y1', r2(c.y1));
+      grad.setAttribute('x2', r2(c.x2)); grad.setAttribute('y2', r2(c.y2));
+    }
+    const opacity = r2(spec.opacity / 100);
+    spec.stops.slice().sort(function (a, b) { return a.offset - b.offset; }).forEach(function (s) {
+      const stop = doc.createElementNS(SVG_NS, 'stop');
+      stop.setAttribute('offset', r2(s.offset) + '%');
+      stop.setAttribute('stop-color', s.color);
+      // Written only when not fully opaque, so the default markup matches the reference syntax.
+      if (opacity !== 1) stop.setAttribute('stop-opacity', opacity);
+      grad.appendChild(stop);
+    });
+    return grad;
   }
 
   function buildOutput() {
@@ -187,37 +316,21 @@
     const vb = out.getAttribute('viewBox').trim().split(/[\s,]+/).map(Number);
     if (!out.hasAttribute('xmlns')) out.setAttribute('xmlns', SVG_NS);
 
-    const gradTag = state.type === 'radial' ? 'radialGradient' : 'linearGradient';
-    const grad = doc.createElementNS(SVG_NS, gradTag);
-    grad.setAttribute('id', state.gid);
-    grad.setAttribute('gradientUnits', 'userSpaceOnUse');
-    if (state.type === 'radial') {
-      grad.setAttribute('cx', r2(vb[0] + vb[2] / 2));
-      grad.setAttribute('cy', r2(vb[1] + vb[3] / 2));
-      grad.setAttribute('r', r2(Math.hypot(vb[2], vb[3]) / 2));
-    } else {
-      const c = linearCoords(vb);
-      grad.setAttribute('x1', r2(c.x1)); grad.setAttribute('y1', r2(c.y1));
-      grad.setAttribute('x2', r2(c.x2)); grad.setAttribute('y2', r2(c.y2));
-    }
-    const opacity = r2(state.opacity / 100);
-    state.stops.slice().sort(function (a, b) { return a.offset - b.offset; }).forEach(function (s) {
-      const stop = doc.createElementNS(SVG_NS, 'stop');
-      stop.setAttribute('offset', r2(s.offset) + '%');
-      stop.setAttribute('stop-color', s.color);
-      // Written only when not fully opaque, so the default markup matches the reference syntax.
-      if (opacity !== 1) stop.setAttribute('stop-opacity', opacity);
-      grad.appendChild(stop);
-    });
     const defs = doc.createElementNS(SVG_NS, 'defs');
-    defs.appendChild(grad);
     out.insertBefore(defs, out.firstChild);
 
+    // One gradient per distinct spec: the shared id for inherited targets, and a suffixed id for overridden ones.
+    const made = {};
     const shapes = shapeList(out);
-    const ref = 'url(#' + state.gid + ')';
-    state.targets.forEach(function (t) {
+    state.targets.forEach(function (t, n) {
       const el = shapes[t.index];
       if (!el) return;
+      const id = state.specs[n] ? state.gid + '-' + n : state.gid;
+      if (!made[id]) {
+        defs.appendChild(gradientFor(doc, id, specFor(n), vb));
+        made[id] = true;
+      }
+      const ref = 'url(#' + id + ')';
       if (t.fill) { el.setAttribute('fill', ref); setStyleProp(el, 'fill', ref); }
       if (t.stroke) { el.setAttribute('stroke', ref); setStyleProp(el, 'stroke', ref); }
     });
@@ -345,6 +458,7 @@
     $('#gsiCopy, #gsiDownload, #gsiAddLib').prop('disabled', !has);
     $('#gsiName').prop('disabled', !has);
     $('#gsiMain').toggleClass('is-locked', !has);
+    renderTargets();
     if (!has) {
       ['#gsiImgOrigLight', '#gsiImgOrigDark', '#gsiImgGradLight', '#gsiImgGradDark'].forEach(function (id) { $(id).attr('src', ''); });
       $('#gsiCode').html('');
@@ -357,16 +471,78 @@
     setPreviewSize();
   }
 
+  /** Live picker: the uploaded icon with each target shape clickable. Rebuilt only when a new file is loaded. */
+  function renderPick() {
+    const host = $('#gsiPick')[0];
+    if (!host) return;
+    if (state.pickFor !== state.gid) {
+      const clone = state.root.cloneNode(true);
+      shapeList(clone).forEach(function (el, i) { el.setAttribute('data-gsi-i', i); });
+      host.replaceChildren(clone);
+      state.pickFor = state.gid;
+    }
+    host.querySelectorAll('.is-picked').forEach(function (el) { el.classList.remove('is-picked'); });
+    if (state.sel >= 0) {
+      const el = host.querySelector('[data-gsi-i="' + state.targets[state.sel].index + '"]');
+      if (el) el.classList.add('is-picked');
+    }
+  }
+
+  /** Chips to choose the whole icon or one shape. Shown only when there is more than one shape. */
+  function renderTargets() {
+    const many = state.loaded && state.targets.length > 1;
+    $('#gsiTargetRow').toggleClass('hidden', !many);
+    if (!many) return;
+    renderPick();
+    const shapes = shapeList(state.root);
+    function chip(n, label, custom) {
+      const on = state.sel === n;
+      return '<button type="button" class="gsi-chip' + (on ? ' is-active' : '') + '" data-target="' + n + '" aria-pressed="' + on + '"' +
+        (custom ? ' title="Has its own gradient"' : '') + '>' + escHtml(label) + (custom ? ' <span class="gsi-chip-dot" aria-hidden="true"></span>' : '') + '</button>';
+    }
+    const chips = [chip(-1, 'Whole icon', false)];
+    state.targets.forEach(function (t, n) {
+      const el = shapes[t.index];
+      const tag = el ? el.tagName.toLowerCase() : 'shape';
+      chips.push(chip(n, 'Shape ' + (n + 1) + ' · ' + tag, !!state.specs[n]));
+    });
+    $('#gsiTargets').html(chips.join(''));
+    $('#gsiTargetReset').prop('disabled', !(state.sel >= 0 && state.specs[state.sel]));
+  }
+
   function setPreviewSize() {
     const el = $('#gsiCompare')[0];
     if (el) el.style.setProperty('--gsi-size', state.size + 'px');
   }
 
   /** Rebuilds the output from current settings and refreshes everything that depends on it. */
-  function update() {
+  function refresh() {
     if (!state.loaded) return;
     state.output = buildOutput();
     renderPreview();
+  }
+
+  /** Saves the live settings to the target being edited, then refreshes. */
+  function update() {
+    if (!state.loaded) return;
+    if (state.sel < 0) state.shared = specOf();
+    else state.specs[state.sel] = specOf();
+    refresh();
+  }
+
+  /** Switches the editor to the whole icon (-1) or one shape. Selecting alone does not create an override. */
+  function selectTarget(n) {
+    if (!state.loaded) return;
+    state.sel = n;
+    loadSpec(n < 0 ? state.shared : specFor(n));
+    refresh();
+  }
+
+  function matchWhole() {
+    if (state.sel < 0) return;
+    delete state.specs[state.sel];
+    loadSpec(state.shared);
+    refresh();
   }
 
   function defaultName() {
@@ -395,7 +571,7 @@
     return base || 'icon';
   }
 
-  function loadText(text, filename) {
+  function loadText(text, filename, keepStyle) {
     let root;
     try {
       root = sanitise(text);
@@ -414,16 +590,24 @@
     state.baseName = safeBase(filename);
     state.gid = 'gsi-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
     state.loaded = true;
-    state.nameTouched = false;
-    state.opacity = 100;
     $('#gsiFileName').text(filename);
     $('#gsiFileRow').removeClass('hidden');
     $('#gsiDrop').addClass('is-loaded');
-    applyPreset('linear');
-    $('#gsiName').val(defaultName());
+    // Target indexes change with the file, so overrides are cleared on every load.
+    state.specs = {};
+    state.sel = -1;
+    if (!keepStyle) {
+      state.nameTouched = false;
+      state.opacity = 100;
+      applyPreset('linear');
+      $('#gsiName').val(defaultName());
+    } else if (state.shared) {
+      loadSpec(state.shared);
+    }
     update();
     setStatus('Loaded ' + filename + '. ' + found.targets.length + ' shape(s) will take the gradient.', 'success');
   }
+
 
   function readFile(file) {
     if (!file) return;
@@ -438,13 +622,95 @@
   }
 
   function resetUpload() {
-    Object.assign(state, { loaded: false, root: null, original: '', targets: [], output: '', gid: '', nameTouched: false, opacity: 100 });
+    Object.assign(state, { loaded: false, root: null, original: '', targets: [], output: '', gid: '', nameTouched: false, opacity: 100, shared: null, specs: {}, sel: -1 });
     $('#gsiFileRow').addClass('hidden');
     $('#gsiDrop').removeClass('is-loaded');
     $('#gsiName').val('');
     setStatus('', null);
     applyPreset('linear');
     renderPreview();
+  }
+
+  // ── image tab ─────────────────────────────────────────────────────────
+  let lastImage = null;   // { img, name } of the last converted image, for re-tracing
+
+  function setImgStatus(msg, kind) {
+    $('#gsiImgStatus').text(msg || '').toggleClass('is-error', kind === 'error')
+      .toggleClass('is-success', kind === 'success').toggleClass('is-loading', kind === 'loading');
+  }
+
+  function showTab(which) {
+    const svgOn = which === 'svg';
+    $('#gsiTabSvg').toggleClass('is-active', svgOn).attr('aria-selected', String(svgOn));
+    $('#gsiTabImg').toggleClass('is-active', !svgOn).attr('aria-selected', String(!svgOn));
+    $('#gsiPaneSvg').toggleClass('hidden', !svgOn);
+    $('#gsiPaneImg').toggleClass('hidden', svgOn);
+  }
+
+  function traceImage(keepStyle) {
+    if (!lastImage) return;
+    if (!lastImage.img.naturalWidth || !lastImage.img.naturalHeight) { setImgStatus('The image has no size.', 'error'); return; }
+    const detail = +$('#gsiImgDetail').val() || 192;
+    const cut = (+$('#gsiImgThreshold').val() || 50) / 100 * 255;
+    const invert = $('#gsiImgInvert').is(':checked');
+    const img = lastImage.img;
+    const scale = Math.min(1, detail / Math.max(img.naturalWidth, img.naturalHeight));
+    const W = Math.max(1, Math.round(img.naturalWidth * scale));
+    const H = Math.max(1, Math.round(img.naturalHeight * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, W, H);
+    const px = ctx.getImageData(0, 0, W, H).data;
+
+    // A transparent image's shape is its opaque part, whatever the colour. Otherwise use brightness.
+    let transparent = false;
+    for (let i = 0; i < W * H; i++) if (px[i * 4 + 3] < 255) { transparent = true; break; }
+    const mask = new Uint8Array(W * H);
+    let ink = 0;
+    for (let i = 0; i < W * H; i++) {
+      let on;
+      if (transparent) {
+        on = px[i * 4 + 3] >= cut;
+      } else {
+        const lum = 0.2126 * px[i * 4] + 0.7152 * px[i * 4 + 1] + 0.0722 * px[i * 4 + 2];
+        on = (lum < cut) !== invert;
+      }
+      if (on) { mask[i] = 1; ink++; }
+    }
+    if (!ink) { setImgStatus(transparent
+      ? 'No visible shape was found. The image is transparent, so its icon is the opaque part. Try a lower threshold or check the image is not blank.'
+      : 'The icon and background look too similar. Move the threshold, or tick "Icon is lighter than its background" if the icon is light.', 'error'); return; }
+
+    const paths = traceMask(mask, W, H);
+    if (!paths.length) { setImgStatus('No shape could be traced. Try a higher detail level or a different threshold.', 'error'); return; }
+    const base = safeBase(lastImage.name);
+    loadText(buildTracedSvg(paths, W, H), base + '.svg', keepStyle);
+    const source = transparent ? 'shape taken from the transparent areas' : 'shape taken from brightness' + (invert ? ', inverted' : '');
+    setImgStatus('Converted ' + lastImage.name + ' to ' + paths.length + ' path(s) at ' + W + '×' + H + ' (' + source + '). Gradient applied below.', 'success');
+  }
+
+  function readImage(file) {
+    if (!file) return;
+    if (/svg/i.test(file.type) || /\.svg$/i.test(file.name)) { setImgStatus('For SVG files, use the SVG file tab.', 'error'); return; }
+    if (!/^image\//.test(file.type)) { setImgStatus('Choose an image file (PNG, JPG, WebP, GIF or BMP).', 'error'); return; }
+    if (file.size > MAX_IMAGE_BYTES) { setImgStatus('This image is larger than 5 MB.', 'error'); return; }
+    setImgStatus('Converting ' + file.name + '…', 'loading');
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = function () {
+      URL.revokeObjectURL(url);
+      lastImage = { img: img, name: file.name };
+      $('#gsiImgRetrace').prop('disabled', false);
+      traceImage(false);
+    };
+    img.onerror = function () {
+      URL.revokeObjectURL(url);
+      setImgStatus('The image could not be read.', 'error');
+    };
+    img.src = url;
   }
 
   // ── actions ───────────────────────────────────────────────────────────
@@ -543,6 +809,16 @@
       });
       $(document).on('click', '#gsiRemove', resetUpload);
 
+      $(document).on('click', '#gsiTargets .gsi-chip', function () {
+        selectTarget(Number($(this).attr('data-target')));
+      });
+      $(document).on('click', '#gsiPick [data-gsi-i]', function () {
+        const idx = Number(this.getAttribute('data-gsi-i'));
+        const n = state.targets.findIndex(function (t) { return t.index === idx; });
+        if (n >= 0) selectTarget(n);
+      });
+      $(document).on('click', '#gsiTargetReset', matchWhole);
+
       $(document).on('click', '#gsiPresets .gsi-preset', function () {
         if (!state.loaded) return;
         applyPreset($(this).data('preset'));
@@ -606,6 +882,32 @@
       });
       $(document).on('click', '#gsiAddLib', addToLibrary);
 
+      $(document).on('click', '#gsiTabSvg', function () { showTab('svg'); });
+      $(document).on('click', '#gsiTabImg', function () { showTab('img'); });
+      $(document).on('click', '#gsiImgDrop', function () { $('#gsiImgFile').trigger('click'); });
+      $(document).on('keydown', '#gsiImgDrop', function (e) {
+        if (e.target === this && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); $('#gsiImgFile').trigger('click'); }
+      });
+      $(document).on('change', '#gsiImgFile', function () {
+        const file = this.files && this.files[0];
+        this.value = '';
+        readImage(file);
+      });
+      $(document).on('dragenter dragover', '#gsiImgDrop', function (e) {
+        e.preventDefault();
+        $(this).addClass('is-over');
+      });
+      $(document).on('dragleave dragend', '#gsiImgDrop', function () { $(this).removeClass('is-over'); });
+      $(document).on('drop', '#gsiImgDrop', function (e) {
+        e.preventDefault();
+        $(this).removeClass('is-over');
+        const files = e.originalEvent && e.originalEvent.dataTransfer ? e.originalEvent.dataTransfer.files : null;
+        readImage(files && files[0]);
+      });
+      $(document).on('input', '#gsiImgThreshold', function () { $('#gsiImgThresholdOut').text(this.value); });
+      $(document).on('change', '#gsiImgThreshold, #gsiImgDetail, #gsiImgInvert', function () { traceImage(true); });
+      $(document).on('click', '#gsiImgRetrace', function () { traceImage(true); });
+
 }
 
   return { load: loadText, bind: bindEvents };
@@ -638,7 +940,7 @@
     return fetch('components/templates/svg-gradient-svg-icons.html?v=1').then(function (r) { return r.text(); }).then(function (html) {
       const prefix = 'lvm-';
       const markup = $('<div>').html(html).find('.gsi')[0].outerHTML
-        .replace(/\b(id|for)="gsi/g, '$1="' + prefix + 'gsi');
+        .replace(/\b(id|for|aria-controls)="gsi/g, '$1="' + prefix + 'gsi');
       $(container).off().empty().html(markup);
       const editor = createEditor(container, prefix, $);
       editor.bind();

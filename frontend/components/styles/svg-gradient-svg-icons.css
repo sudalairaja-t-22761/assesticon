@@ -19,6 +19,23 @@
 .gsi-status.is-success { color: var(--success, #30a46c); }
 .gsi-status.is-loading { color: var(--text-tertiary); }
 
+/* upload source tabs */
+.gsi-tabs {
+  display: inline-flex; gap: 4px; padding: 3px; margin-bottom: 14px;
+  border-radius: var(--radius-xs); background: var(--bg-hover);
+}
+.gsi-tab {
+  font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer;
+  border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--text-tertiary);
+}
+.gsi-tab.is-active { background: var(--bg-panel); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.gsi-trace { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.gsi-trace-row { display: flex; align-items: center; gap: 10px; }
+.gsi-trace-row input[type="range"] { flex: 1; }
+.gsi-check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-primary); }
+#gsiPaneImg .gsi-trace .btn { align-self: flex-start; }
+#gsiPaneImg .gsi-trace .gsi-hint { margin: 0; line-height: 1.4; }
+
 /* upload */
 .gsi-drop {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
@@ -54,6 +71,7 @@
 .gsi-custom { display: flex; flex-direction: column; gap: 14px; }
 .gsi-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) 76px; gap: 10px; align-items: center; }
 .gsi-row.hidden { display: none; }
+.gsi-targets.hidden { display: none; }
 .gsi-range { width: 100%; accent-color: var(--accent); }
 .gsi-input {
   width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit; font-size: 13px;
@@ -64,6 +82,24 @@
 .gsi-input:disabled { opacity: .6; }
 .gsi-num { text-align: right; }
 .gsi-stops-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.gsi-targets { display: flex; flex-direction: column; gap: 8px; }
+.gsi-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gsi-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: pointer;
+  background: var(--bg-panel); border: 1px solid var(--border-light); border-radius: 999px;
+  color: var(--text-primary); font: inherit; font-size: 12px;
+}
+.gsi-chip:hover { border-color: var(--accent); }
+.gsi-chip.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.gsi-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.gsi-pick {
+  display: flex; align-items: center; justify-content: center; min-height: 120px; max-height: 220px;
+  padding: 12px; background: var(--bg-panel); border: 1px dashed var(--border-light); border-radius: var(--radius);
+}
+.gsi-pick svg { width: 100%; height: auto; max-height: 196px; }
+.gsi-pick [data-gsi-i] { cursor: pointer; }
+.gsi-pick [data-gsi-i]:hover { filter: drop-shadow(0 0 2px var(--accent)); }
+.gsi-pick .is-picked { filter: drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 1px var(--accent)); }
 .gsi-stops { display: flex; flex-direction: column; gap: 8px; }
 .gsi-stop { display: grid; grid-template-columns: 40px minmax(0, 1fr) 76px 32px; gap: 10px; align-items: center; }
 .gsi-color {
