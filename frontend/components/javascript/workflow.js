@@ -41,7 +41,7 @@
   }
   // Timeline action labels for stored actions like designer_approved.
   var ACTION_LABEL = { requested: 'requested (mock)', requested_master: 'requested (master)', pushed: 'pushed',
-    pushed_mock: 'pushed to mock', pushed_master: 'approved + pushed to master', admin_declined: 'declined by admin',
+    pushed_mock: 'pushed to mock', pushed_master: 'approved + pushed to master', admin_declined: 'declined by admin', admin_rejected: 'rejected by admin',
     npm_published: 'published to npm', npm_publish_failed: 'npm publish failed', npm_republish_requested: 're-publish requested',
     cliq_sent: 'Cliq message sent', cliq_failed: 'Cliq message failed', notify_failed: 'notification failed' };
   function actionLabel(action) {
@@ -811,14 +811,16 @@
 
   function stepsHtml(r) {
     var rej = function (d) { return d === 'rejected'; };
-    var master = stageOf(r) === 'master', declined = master && r.status === 'rejected' && !rej(r.designerDecision) && !rej(r.uiDecision);
+    // Rejected by an admin (not in an audit): the stage the request was waiting in shows as rejected.
+    var master = stageOf(r) === 'master', byAdmin = r.status === 'rejected' && !rej(r.designerDecision) && !rej(r.uiDecision);
+    var visualOk = r.designerDecision === 'approved', uiOk = r.uiDecision === 'approved', declined = byAdmin && visualOk && uiOk;
     var steps = [
       { label: master ? 'Mock verified · master requested' : 'Unverified · requested', cls: 'done' },
-      { label: 'Visual audit', cls: r.designerDecision === 'approved' ? 'done' : rej(r.designerDecision) ? 'rejected' : 'current' },
-      { label: 'UI audit', cls: r.uiDecision === 'approved' ? 'done' : rej(r.uiDecision) ? 'rejected' : (r.designerDecision === 'approved' ? 'current' : '') }
+      { label: 'Visual audit', cls: visualOk ? 'done' : rej(r.designerDecision) || byAdmin ? 'rejected' : 'current' },
+      { label: 'UI audit', cls: uiOk ? 'done' : rej(r.uiDecision) || (byAdmin && visualOk) ? 'rejected' : (visualOk && !byAdmin ? 'current' : '') }
     ];
     if (master) steps.push({ label: 'Admin approval', cls: r.status === 'pushed' ? 'done' : declined ? 'rejected' : (r.status === 'approved' ? 'current' : '') });
-    steps.push({ label: master ? 'Pushed to master' : 'Pushed to mock', cls: r.status === 'pushed' ? 'done' : (!master && r.status === 'approved' ? 'current' : '') });
+    steps.push({ label: master ? 'Pushed to master' : 'Pushed to mock', cls: r.status === 'pushed' ? 'done' : !master && declined ? 'rejected' : (!master && r.status === 'approved' ? 'current' : '') });
     var rel = releaseState(r);
     if (rel || r.status !== 'pushed') {
       steps.push({ label: rel === 'published' ? 'Published v' + r.releaseVersion : rel === 'failed' ? 'npm publish failed' : 'Published to npm',
@@ -844,8 +846,11 @@
       if (wf.role === 'admin' && r.status === 'pending') {
         actions += '<button class="btn btn-ghost btn-sm vf-pill" id="wfResendBtn" type="button" title="Send the mail and the Cliq bot message to the approvers of every open review again">Resend mail + Cliq</button>';
       }
+      if (wf.role === 'admin' && (r.status === 'pending' || r.status === 'approved')) { // any stage that is still open
+        actions += '<button class="btn btn-ghost btn-sm vf-pill" id="wfAdminRejectBtn" type="button" style="color:var(--danger);margin-left:auto" title="Reject this request now, whatever stage it is in. A reason is required and is sent to the requester.">Reject request</button>';
+      }
       if (canDelete(r)) {
-        actions += '<button class="btn btn-ghost btn-sm vf-pill" data-vf-req-del="' + esc(r.ROWID) + '" type="button" style="color:var(--danger);margin-left:auto">Delete request</button>';
+        actions += '<button class="btn btn-ghost btn-sm vf-pill" data-vf-req-del="' + esc(r.ROWID) + '" type="button" style="color:var(--danger)' + (wf.role === 'admin' && (r.status === 'pending' || r.status === 'approved') ? '' : ';margin-left:auto') + '">Delete request</button>';
       }
       var target = esc(TARGETS[r.targetSprite] || r.targetSprite);
       if (res.canPush === 'mock') {
@@ -908,8 +913,12 @@
     e.stopPropagation();
     var id = String($(this).data('vf-req-del'));
     var r = (wf.requests || []).filter(function (x) { return String(x.ROWID) === id; })[0];
-    if (!window.confirm('Delete the request' + (r ? ' for "' + r.iconName + '"' : '') + '? Its history is removed too.')) return;
-    api('DELETE', 'requests/' + encodeURIComponent(id)).then(function () {
+    var own = r && String(r.requestedBy).toLowerCase() === String(wf.email || '').toLowerCase(), note = '';
+    if (wf.role === 'admin' && !own) { // an admin deleting someone's request gives the reason (sent to the requester)
+      note = askReason('Delete the request' + (r ? ' for "' + r.iconName + '"' : '') + '? Its history is removed too.\n\nReason (required, sent to the requester):');
+      if (note === null) return;
+    } else if (!window.confirm('Delete the request' + (r ? ' for "' + r.iconName + '"' : '') + '? Its history is removed too.')) return;
+    api('DELETE', 'requests/' + encodeURIComponent(id) + (note ? '?note=' + encodeURIComponent(note) : '')).then(function () {
       SF.showToast('Request deleted');
       if (wf.openId === id) { wf.openId = null; $('#wfRequestDetail').empty(); }
       return Promise.all([loadRequests(), loadStatuses()]);
@@ -1032,6 +1041,30 @@
     api('POST', 'requests/' + r.ROWID + '/republish').then(function () {
       SF.showToast('Re-publish requested for ' + r.iconName + ' — the office npm publisher answers within about a minute');
       return loadRequests();
+    }).catch(function (e) { fail(e); $b.prop('disabled', false); });
+  });
+
+  // A required reason: asks again while it is empty; null when cancelled.
+  function askReason(question) {
+    for (;;) {
+      var v = window.prompt(question, '');
+      if (v === null) return null;
+      v = v.trim().slice(0, 500);
+      if (v) return v;
+      window.alert('A reason is required.');
+    }
+  }
+
+  // Admin rejects an open request at any stage (Visual audit, UI audit or waiting for the push), with a reason.
+  $(document).on('click', '#wfAdminRejectBtn', function () {
+    var r = wf.open;
+    var note = askReason('Reject the request for "' + r.iconName + '"? It is closed and the icon goes back to ' + (stageOf(r) === 'master' ? 'mock verified' : 'unverified') +
+      '.\n\nReason (required, sent to the requester):');
+    if (note === null) return;
+    var $b = $(this).prop('disabled', true);
+    api('POST', 'requests/' + r.ROWID + '/reject', { note: note }).then(function () {
+      SF.showToast('Rejected the request for ' + r.iconName);
+      return Promise.all([loadRequests(), loadStatuses()]);
     }).catch(function (e) { fail(e); $b.prop('disabled', false); });
   });
 

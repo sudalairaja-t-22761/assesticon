@@ -38,7 +38,10 @@
  *   POST   /api/requests/:id/review     → { decision: approve|reject, note }  (any approver of the pool, first decision counts)
  *   POST   /api/mail/test               → send a test mail to the signed-in admin; reports where it ran + the exact error [admin]
  *   POST   /api/requests/:id/resend     → mail the approvers of every still-open review again          [admin]
- *   DELETE /api/requests/:id            → admin: any request; requester: own pending/rejected request
+ *   DELETE /api/requests/:id            → admin: any request, ?note= reason required (sent to the requester + the admins);
+ *                                         requester: own pending/rejected request
+ *   POST   /api/requests/:id/reject     → { note }  admin rejects an open request at any stage (Visual audit, UI audit,
+ *                                         waiting for push); the reason is required                                 [admin]
  *   POST   /api/requests/:id/push       → { commitSha? }  record the push   [admin]
  *   POST   /api/requests/:id/decline    → { note }  admin turns down an audited master request         [admin]
  *   POST   /api/cliq/test               → send a test Cliq bot message to the signed-in admin              [admin]
@@ -210,6 +213,10 @@ function createWorkflowRouter({ requireSession, repos }) {
             case "pushed": return { ...base, tone: "ok", title: `Pushed to ${branch}`,
                 line: o.alreadyThere ? `${who}: the same icon is already on the ${branch}, so the request is recorded as pushed.`
                     : `${who} was pushed to the ${branch}. The npm version follows as soon as it is published.` };
+            case "admin_rejected": return { ...base, tone: "bad", title: "Request rejected by an admin",
+                line: `${who} (${branch}) was rejected by an admin. The request is closed; a new request can be raised after the icon is fixed.` };
+            case "deleted": return { ...base, tone: "bad", title: "Request deleted by an admin",
+                line: `${who} (${branch}) was deleted by an admin.${r.status === "pushed" ? " The icon stays on the branch." : ""}` };
             case "declined": return { ...base, tone: "bad", title: "Master push declined",
                 line: `${who} was declined by an admin. The icon stays mock verified.` };
             default: return { ...base, title: "Icon request update", line: `${who}: ${event}.` };
@@ -365,6 +372,20 @@ function createWorkflowRouter({ requireSession, repos }) {
         await setIconStatus(db, r.symbolId, r.sprite, startStatus(r), actor);
         await logEvent(db, r.ROWID, actor, "admin_declined", note);
         await notify(req, db, "declined", { ...r, status: "rejected" }, { actor, note });
+        return saved || { ...r, status: "rejected" };
+    }
+
+    /** Admin rejects an open request at any stage (waiting for the Visual audit, the UI audit or the push). The reason is required. */
+    async function adminReject(req, db, actor, id, note) {
+        const r = await findRequest(db, id);
+        if (actor.role !== "admin") throw fail(403, "Only an admin can reject a request at any stage");
+        if (!OPEN.includes(r.status)) throw fail(409, r.status === "pushed" ? "Already pushed — a pushed request cannot be rejected" : "This request is already closed");
+        const reason = str(note, 500).trim();
+        if (!reason) throw fail(400, "Add a reason so the requester knows why the request was rejected");
+        const saved = await db.update("icon_requests", r.ROWID, { status: "rejected", rejectedBy: actor.email || "", rejectNote: reason });
+        await setIconStatus(db, r.symbolId, r.sprite, startStatus(r), actor);
+        await logEvent(db, r.ROWID, actor, "admin_rejected", reason);
+        await notify(req, db, "admin_rejected", { ...r, status: "rejected" }, { actor, note: reason });
         return saved || { ...r, status: "rejected" };
     }
 
@@ -1032,6 +1053,16 @@ function createWorkflowRouter({ requireSession, repos }) {
         if (req.role !== "admin" && !(own && ["pending", "rejected"].includes(r.status))) {
             return res.status(403).json({ success: false, message: "Only an admin, or the requester while it is pending or rejected, can delete a request" });
         }
+        // An admin deleting someone's request says why: the history goes with the request, so the reason is sent to the
+        // requester and the admins and kept in `request_deletions`.
+        const reason = str(req.query.note || (req.body && req.body.note), 500).trim();
+        if (!own) {
+            if (!reason) return res.status(400).json({ success: false, message: "Add a reason so the requester knows why the request was deleted" });
+            const actor = actorOf(req);
+            await db.insert("request_deletions", { requestId: String(r.ROWID), symbolId: r.symbolId, iconName: r.iconName, stage: stageOf(r), status: r.status,
+                requestedBy: r.requestedBy || "", deletedBy: actor.email, reason, at: new Date().toISOString() }).catch((e) => console.warn("[workflow] deletion record", e.message));
+            await notify(req, db, "deleted", r, { actor, note: reason });
+        }
         await db.remove("icon_requests", r.ROWID);
         for (const ev of (await db.all("request_events")).filter((e) => String(e.requestId) === String(r.ROWID))) await db.remove("request_events", ev.ROWID);
         // Without an open request the icon goes back to where this stage started (a pushed icon keeps its status).
@@ -1061,6 +1092,11 @@ function createWorkflowRouter({ requireSession, repos }) {
         const saved = await db.update("icon_requests", r.ROWID, { releaseStatus: "requested", releaseError: "", republishAt: new Date().toISOString(), republishBy: me(req).email || "" });
         await logEvent(db, r.ROWID, actorOf(req), "npm_republish_requested", r.releaseError ? `after: ${str(r.releaseError, 300)}` : "");
         res.json({ success: true, request: saved || { ...r, releaseStatus: "requested" } });
+    }));
+
+    // Admin rejects an open request at any stage, with a reason.
+    router.post("/requests/:id/reject", requireRole(["admin"]), wrap(async (req, res) => {
+        res.json({ success: true, request: await adminReject(req, store.forRequest(req), actorOf(req), req.params.id, req.body && req.body.note) });
     }));
 
     // Admin turns down a master request after both audits passed: the icon stays mock verified.
