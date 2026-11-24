@@ -138,11 +138,11 @@
   function loadMe() {
     return api('GET', 'me').then(function (r) {
       wf.role = r.role; wf.email = r.email; wf.menus = r.menus || null;
-      $('#wfMembersBtn, #wfActivityLogBtn').toggleClass('hidden', r.role !== 'admin');
+      $('#wfMembersBtn, #wfActivityLogBtn, #skillAdminBtn').toggleClass('hidden', r.role !== 'admin');
       applyMenus();
       if (typeof SF.refreshMasterLibraryRole === 'function') SF.refreshMasterLibraryRole();
     }).catch(function () {
-      wf.role = null; wf.menus = null; $('#wfMembersBtn, #wfActivityLogBtn').addClass('hidden');
+      wf.role = null; wf.menus = null; $('#wfMembersBtn, #wfActivityLogBtn, #skillAdminBtn').addClass('hidden');
       if (typeof SF.refreshMasterLibraryRole === 'function') SF.refreshMasterLibraryRole();
     });
   }

@@ -865,6 +865,26 @@ app.use("/api", createBugRouter({
     }
 }));
 
+// Skill package: the Claude skill zip signed-in users download (+ the install prompt); admins upload / replace it.
+// One zip, kept in Stratus (local disk on a local run).
+const LOCAL_SKILL_DIR = path.join(os.tmpdir(), "svgforge-skill");
+const { createSkillPackRouter } = require("./routes/skill-pack");
+app.use("/api", createSkillPackRouter({
+    requireSession,
+    files: {
+        async put(req, key, buf, ct) {
+            if (shouldUseStratus(req)) return stratusPut(req, key, buf, ct);
+            fs.mkdirSync(LOCAL_SKILL_DIR, { recursive: true });
+            fs.writeFileSync(path.join(LOCAL_SKILL_DIR, path.basename(key)), buf);
+        },
+        async get(req, key) {
+            if (shouldUseStratus(req)) return stratusGet(req, key);
+            const f = path.join(LOCAL_SKILL_DIR, path.basename(key));
+            return fs.existsSync(f) ? fs.readFileSync(f) : null;
+        }
+    }
+}));
+
 // ===================================
 // SAVE SPRITE (new endpoint — local disk + Stratus, no Catalyst DataStore needed)
 // POST /api/save-sprite

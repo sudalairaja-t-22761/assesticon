@@ -135,6 +135,7 @@
 
     $('#authControls').toggleClass('hidden', !hasAuth);
     $('#authUserBox').toggleClass('hidden', !hasAuth || !isSignedIn);
+    $('#skillGetBtn').toggleClass('hidden', !isSignedIn); // skill-pack.js
     $('#authUserName').text(state.auth.username  || 'Zoho User');
     $('#authUserEmail').text(state.auth.useremail || '');
     $('#authUserAvatar')
