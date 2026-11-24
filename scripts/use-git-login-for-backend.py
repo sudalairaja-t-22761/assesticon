@@ -16,7 +16,7 @@ import subprocess
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FN = os.path.join(ROOT, "functions", "spriteForgeJoin")
 TARGETS = [".env"] + ([".env.production"] if "--production" in sys.argv else [])
-QUERY = "protocol=https\nhost=zrepository.zohocorpcloud.in\npath=zohocorp/CRM/CRM_UI/CRM_UI_LIBRARY.git\n\n"
+QUERY = "protocol=https\nhost=zrepository.zohocorpcloud.in\npath=zohocorp/ICON_LIBRARY/Icons/crm_core_icons.git\n\n"
 
 out = subprocess.run(["git", "credential", "fill"], input=QUERY, capture_output=True, text=True,
                      env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}).stdout

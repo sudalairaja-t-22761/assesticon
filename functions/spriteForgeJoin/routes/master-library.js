@@ -374,12 +374,12 @@ function createMasterLibraryRouter(deps) {
         // External release: only the icon is committed; npm-publisher bumps + publishes + pushes the version.
         if (repoResult.changed && external) {
             repoResult.published = { name: (cache.version && cache.version.name) || null, version: null, from: cache.version && cache.version.version,
-                registry: cfg.npm.registry, tag: cfg.npm.distTag || cfg.npm.preTag, pending: true, external: true };
+                registry: cfg.npm.registry, tag: cfg.npm.distTag || cfg.npm.preTag || "latest", pending: true, external: true };
         }
         // Deferred release: the version is committed; npm-publisher publishes it (status "pending" until then).
         if (repoResult.changed && release && cfg.npm.mode === "deferred" && !repoResult.published) {
             repoResult.published = { name: release.name, version: release.to, from: release.from, registry: cfg.npm.registry,
-                tag: cfg.npm.distTag || cfg.npm.preTag, pending: true };
+                tag: cfg.npm.distTag || cfg.npm.preTag || "latest", pending: true };
         }
 
         // The repository now holds exactly what was pushed — mirror it in the cache.
@@ -486,7 +486,7 @@ function createMasterLibraryRouter(deps) {
         try { const f = path.join(tmp, `sf-diag-${process.pid}`); fs.writeFileSync(f, "x"); fs.unlinkSync(f); tmpWritable = true; } catch (_) {}
         const reachable = anon.ok || authed.ok;
         // ?npm=1 → the release step: npm present, registry reachable, token accepted, current dist-tag (no secrets).
-        let release = cfg.npm ? { enabled: !!cfg.npm.enabled, mode: cfg.npm.mode, registry: cfg.npm.registry || null, tokenSet: !!cfg.npm.token, tag: cfg.npm.distTag || cfg.npm.preTag } : null;
+        let release = cfg.npm ? { enabled: !!cfg.npm.enabled, mode: cfg.npm.mode, registry: cfg.npm.registry || null, tokenSet: !!cfg.npm.token, tag: cfg.npm.distTag || cfg.npm.preTag || "latest" } : null;
         if (cfg.npm && String(req.query.npm || "") === "1") {
             release = { mode: cfg.npm.mode, ...(await timed(() => npmRelease.check(cfg.npm, (cache.version && cache.version.name) || "@zohocrm/crm-ui-library"), 90000)) };
         }

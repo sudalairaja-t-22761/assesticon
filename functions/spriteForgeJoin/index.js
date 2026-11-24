@@ -823,7 +823,7 @@ const iconLibraryRouter = createMasterLibraryRouter({
 });
 app.use("/api/icon-library", iconLibraryRouter);
 
-// Master branch of CRM_UI_LIBRARY (MASTER_REPO_BRANCH, default CRM_UI_LIBRARY_ICON_BRANCH_CLONE): read by every
+// Master branch of CRM_UI_LIBRARY (MASTER_REPO_BRANCH, default master): read by every
 // signed-in user for the Library compare; commits (approved master requests) are admin only.
 const masterBranchRouter = createMasterLibraryRouter({
     getSession,
@@ -2073,6 +2073,6 @@ if (require.main === module) {
                 : `bucket → ${process.env.STRATUS_BUCKET_NAME || '(not set)'}`
         }`);
         console.log(`[local] Auth enforce: ${process.env.AUTH_ENFORCE || 'false'}`);
-        console.log(`[local] Master UI Library (direct from repo): ${process.env.REPO_NAME || 'CRM_UI_LIBRARY'}@${process.env.REPO_BRANCH || 'CRM_UI_LIBRARY_ICON_TOOL'} via ${process.env.REPO_PROVIDER || 'git'} (token ${process.env.REPO_TOKEN ? 'set' : 'NOT set'})`);
+        console.log(`[local] Master UI Library (direct from repo): ${process.env.REPO_NAME || 'crm_core_icons'}@${process.env.REPO_BRANCH || 'MOCK_BRANCH'} via ${process.env.REPO_PROVIDER || 'git'} (token ${process.env.REPO_TOKEN ? 'set' : 'NOT set'})`);
     });
 }

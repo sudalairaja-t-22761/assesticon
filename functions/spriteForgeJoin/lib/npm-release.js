@@ -4,8 +4,9 @@
  * npm release step of a repository save (REPO_NPM_PUBLISH=true):
  *   bump <dir>/package.json "version" → npm publish <dir> → the bump is committed and pushed with the saved files.
  *
- * Version scheme: X.Y.Z-<tag>-N with N = 1..max. Each save adds 1 to N; after N = max the next save is X.Y.(Z+1)-<tag>-1.
- * A version without that tag (e.g. 1.0.71 or 1.0.71-icon-2) becomes X.Y.Z-<tag>-1.
+ * Version scheme with a tag (mock branch, "mock"): X.Y.Z-<tag>-N with N = 1..max. Each save adds 1 to N; after N = max
+ * the next save is X.Y.(Z+1)-<tag>-1. A version without that tag (e.g. 1.0.71 or 1.0.71-icon-2) becomes X.Y.Z-<tag>-1.
+ * Without a tag (master branch): plain X.Y.Z, each save is X.Y.(Z+1); a pre-release (1.0.71-mock-2) becomes 1.0.71.
  */
 
 const fs = require("fs");
@@ -15,8 +16,9 @@ const { execFile } = require("child_process");
 
 function nextVersion(current, tag, max) {
     const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z]+)[-.](\d+))?$/.exec(String(current || "").trim());
-    if (!m) throw Object.assign(new Error(`Unexpected package.json version "${current}" (expected X.Y.Z or X.Y.Z-${tag}-N)`), { keep: true, status: 409 });
+    if (!m) throw Object.assign(new Error(`Unexpected package.json version "${current}" (expected X.Y.Z${tag ? ` or X.Y.Z-${tag}-N` : ""})`), { keep: true, status: 409 });
     const [, a, b, c, t, n] = m;
+    if (!tag) return t ? `${a}.${b}.${c}` : `${a}.${b}.${+c + 1}`;
     if (t === tag && +n < max) return `${a}.${b}.${c}-${tag}-${+n + 1}`;
     if (t === tag) return `${a}.${b}.${+c + 1}-${tag}-1`;
     return `${a}.${b}.${c}-${tag}-1`;
@@ -110,8 +112,8 @@ async function publish(exportDir, npm, release) {
     try {
         const pkgDir = path.join(work, "pkg");
         const files = await exportDir(npm.dir, pkgDir);
-        // Always publish under a dist-tag (default: the version tag, e.g. "icontool") so `latest` is never moved by accident.
-        const tag = npm.distTag || npm.preTag;
+        // Always publish under an explicit dist-tag: the version tag ("mock") for tagged versions, "latest" for plain ones.
+        const tag = npm.distTag || npm.preTag || "latest";
         const args = ["publish", "--registry", npm.registry, "--tag", tag];
         if (npm.dryRun) args.push("--dry-run");
         await runNpm(args, { cwd: pkgDir, env: npmEnv(npm).env, timeout: npm.timeoutMs || 180000 });
@@ -127,7 +129,7 @@ async function publish(exportDir, npm, release) {
  */
 async function check(npm, name) {
     const out = { enabled: !!npm.enabled, registry: npm.registry || null, tokenSet: !!npm.token, dryRun: !!npm.dryRun,
-        tag: npm.distTag || npm.preTag, npm: null, login: null, distTag: null };
+        tag: npm.distTag || npm.preTag || "latest", npm: null, login: null, distTag: null };
     const c = npmCommand();
     try { out.npm = { ok: true, version: (await runNpm(["--version"], { env: npmEnv(npm).env, timeout: 20000 }, "npm --version")).stdout.trim(), via: c.pre.length ? "npm-cli.js beside node" : c.cmd }; }
     catch (e) { out.npm = { ok: false, error: e.message }; }

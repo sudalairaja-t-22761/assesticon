@@ -33,9 +33,9 @@ function bool(name, fallback) {
 const originOf = (u) => { try { return new URL(u).origin; } catch (_) { return ""; } };
 const DEFAULT_BASE_URL     = () => str("REPO_BASE_URL", "");
 const DEFAULT_GIT_HOST     = () => originOf(str("REPO_GIT_URL", ""));
-const DEFAULT_PROJECT_PATH = "zohocorp/CRM/CRM_UI/CRM_UI_LIBRARY";
-const DEFAULT_REPO_NAME    = "CRM_UI_LIBRARY";
-const DEFAULT_BRANCH       = "CRM_UI_LIBRARY_ICON_TOOL";
+const DEFAULT_PROJECT_PATH = "zohocorp/ICON_LIBRARY/Icons/crm_core_icons";
+const DEFAULT_REPO_NAME    = "crm_core_icons";
+const DEFAULT_BRANCH       = "MOCK_BRANCH";
 const DEFAULT_FOLDER       = "Master_ui_library";
 // Where the package.json with the library "version" lives in CRM_UI_LIBRARY (repo-root relative).
 const DEFAULT_VERSION_FILE = "resources/package.json";
@@ -77,10 +77,10 @@ const ICON_DEFAULTS = {
  * UI library (Iconassest) → mock branch (REPO_BRANCH) → master branch (MASTER_REPO_BRANCH, admin push only).
  */
 const MASTER_DEFAULTS = {
-    branch:     "CRM_UI_LIBRARY_ICON_BRANCH_CLONE",
+    branch:     "master",
     folder:     "Master_branch",
-    versionTag: "iconclone",   // 1.0.73-icon-2 → 1.0.73-iconclone-1 → … -iconclone-5 → 1.0.74-iconclone-1
-    distTag:    "iconclone",   // npm publish --tag (never moves "latest")
+    versionTag: "",            // no pre-release tag: plain versions, 0.0.4 → 0.0.5 → 0.0.6
+    distTag:    "latest",      // npm publish --tag
     npmPublish: true
 };
 // Keys MASTER_REPO_* falls back to REPO_* for (same repository, token and registry). Branch, tags and commit users stay its own.
@@ -106,15 +106,15 @@ function load(opts) {
     const tokenUser   = get("TOKEN_USER", "oauth2");
     // File (relative to the repo root) whose "version" is shown at the top of the Library. "" disables it.
     const versionFile = get("VERSION_FILE", D.versionFile !== undefined ? D.versionFile : DEFAULT_VERSION_FILE);
-    // Release on every save: bump <npmDir>/package.json "version" (X.Y.Z-<tag>-N, N = 1..max, then Z+1 and N = 1),
+    // Release on every save: bump <npmDir>/package.json "version" (X.Y.Z-<tag>-N, N = 1..max, then Z+1 and N = 1; without a tag X.Y.(Z+1)),
     // npm publish that folder to npmRegistry, and commit the bump with the saved files. Off unless NPM_PUBLISH=true.
     const npm = {
         enabled:  getBool("NPM_PUBLISH", !!D.npmPublish),
         dir:      get("NPM_DIR", "resources"),
         registry: get("NPM_REGISTRY", ""),
         token:    get("NPM_TOKEN", ""),     // optional; otherwise the server user's ~/.npmrc login is used
-        distTag:  get("NPM_DIST_TAG", D.distTag || ""),  // optional `npm publish --tag`
-        preTag:   get("VERSION_TAG", D.versionTag || "icontool"),
+        distTag:  get("NPM_DIST_TAG", D.distTag || ""),  // optional `npm publish --tag` (default: the version tag, else "latest")
+        preTag:   get("VERSION_TAG", D.versionTag !== undefined ? D.versionTag : "mock"),  // "" = plain X.Y.Z versions
         preMax:   Math.max(1, parseInt(get("VERSION_MAX", "5"), 10) || 5),
         dryRun:   getBool("NPM_DRY_RUN", false),
         // "direct": bump + npm publish here before the push. "deferred": bump + commit here, publish elsewhere.

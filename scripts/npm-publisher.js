@@ -5,7 +5,7 @@
  * does the release for each watched branch:
  *
  *   new icon commits on the branch since the last resources/package.json change
- *     → bump resources/package.json locally (X.Y.Z-<tag>-N, N = 1..5, then Z+1; versions already on the registry skipped)
+ *     → bump resources/package.json locally (mock: X.Y.Z-mock-N, N = 1..5, then Z+1; master: plain X.Y.(Z+1); versions already on the registry skipped)
  *     → npm publish resources --tag <tag>
  *     → ONLY after a successful publish: commit the version and push it to the branch
  *   publish failed → the bump is dropped (nothing pushed), the admins get one failure mail, the next run retries
@@ -48,15 +48,15 @@ function envFile() {
 const ENV = envFile();
 const get = (k, d) => process.env[k] || ENV[k] || d;
 
-const GIT_URL = get("REPO_GIT_URL", "https://zrepository.zohocorpcloud.in/zohocorp/CRM/CRM_UI/CRM_UI_LIBRARY.git");
+const GIT_URL = get("REPO_GIT_URL", "https://zrepository.zohocorpcloud.in/zohocorp/ICON_LIBRARY/Icons/crm_core_icons.git");
 const REGISTRY = get("REPO_NPM_REGISTRY", ["http", "//cm-npmregistry"].join(":"));
 const NPM_DIR = get("REPO_NPM_DIR", "resources");
 const PKG = `${NPM_DIR}/package.json`;
 const MAX = Math.max(1, parseInt(get("REPO_VERSION_MAX", "5"), 10) || 5);
 const BRANCHES = [
-    { branch: get("REPO_BRANCH", "CRM_UI_LIBRARY_ICON_TOOL"), versionTag: get("REPO_VERSION_TAG", "icontool") },
-    { branch: get("MASTER_REPO_BRANCH", "CRM_UI_LIBRARY_ICON_BRANCH_CLONE"), versionTag: get("MASTER_REPO_VERSION_TAG", "iconclone") }
-].map((b, i) => ({ ...b, tag: get(i ? "MASTER_REPO_NPM_DIST_TAG" : "REPO_NPM_DIST_TAG", "") || b.versionTag }));
+    { branch: get("REPO_BRANCH", "MOCK_BRANCH"), versionTag: get("REPO_VERSION_TAG", "mock") },
+    { branch: get("MASTER_REPO_BRANCH", "master"), versionTag: get("MASTER_REPO_VERSION_TAG", "") }   // no tag: plain X.Y.Z versions on "latest"
+].map((b, i) => ({ ...b, tag: get(i ? "MASTER_REPO_NPM_DIST_TAG" : "REPO_NPM_DIST_TAG", "") || b.versionTag || "latest" }));
 const INTERVAL_S = Math.max(15, parseInt(opt("interval", "60"), 10) || 60);
 const FORCE = flag("force-dry-run");
 const DRY = flag("dry-run") || FORCE;
@@ -136,7 +136,7 @@ async function releaseBranch(b) {
     const taken = await registryVersions(pkg.name);
 
     // A version committed earlier (deferred mode) but not published yet: publish it as it is, nothing to push.
-    const own = new RegExp(`-${b.versionTag}-\\d+$`).test(pkg.version);
+    const own = !!b.versionTag && new RegExp(`-${b.versionTag}-\\d+$`).test(pkg.version);
     if (own && !taken.has(pkg.version) && !FORCE) {
         log(`${b.branch}: ${pkg.name}@${pkg.version} is committed but not published — publishing it`);
         await publish(dir, b);

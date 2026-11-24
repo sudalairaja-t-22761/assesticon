@@ -1,10 +1,14 @@
 (function () {
     var isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    // The web client and the functions are served by the same Catalyst host, so the API addresses come from
+    // the page's own origin (no host is written here). Local dev: the backend runs on port 3001 of this machine.
+    var cloudHost = 'assets-icons-management-60067235816.development.catalystserverless.in';
     window.SF_CATALYST_API_BASE = isLocal
-        ? 'http://localhost:3001/'
-        : 'https://assets-icons-management-60067235816.development.catalystserverless.in/server/spriteForgeJoin/';
+        ? location.protocol + '//' + location.hostname + ':3001/'
+        : location.origin + '/server/spriteForgeJoin/';
     // save-assets function: GET lists a user's Savedassest/<username>/ tree, POST saves images.
-    window.SF_SAVE_ASSETS_API = 'https://assets-icons-management-60067235816.development.catalystserverless.in/server/save-assets/';
+    // It has no local copy, so local dev calls the deployed one.
+    window.SF_SAVE_ASSETS_API = (isLocal ? '//' + cloudHost : location.origin) + '/server/save-assets/';
     window.SF_AUTH_ENABLED     = true;
     window.SF_AUTH_STORAGE_KEY = 'sf_session_id';
 
@@ -18,10 +22,10 @@
     // of truth (functions/spriteForgeJoin/.env → REPO_*); these values are used
     // until GET /api/master-library/config answers, and must match that file.
     // The personal token lives ONLY in the server .env (REPO_TOKEN).
-    var repoBase    = 'https://repository.zohocorpcloud.in';
-    var repoProject = 'zohocorp/CRM/CRM_UI/CRM_UI_LIBRARY';
-    var repoBranch  = 'CRM_UI_LIBRARY_ICON_TOOL';
-    var repoName    = 'CRM_UI_LIBRARY';
+    var repoBase    = '//repository.zohocorpcloud.in';   // same scheme as this page; the server config replaces it
+    var repoProject = 'zohocorp/ICON_LIBRARY/Icons/crm_core_icons';
+    var repoBranch  = 'MOCK_BRANCH';
+    var repoName    = 'crm_core_icons';
     // Paths are relative to the repo root; the web UI inserts the repo name after the branch.
     var blobUrl = function (p) { return repoBase + '/' + repoProject + '#/blob/' + repoBranch + '/' + repoName + '/' + p; };
     var repoFile = function (p, kind) {

@@ -6,9 +6,9 @@
  * Read-only API that shares the VERIFIED CRM icons with other products and projects. An icon is verified when it
  * is on a verified branch of CRM_UI_LIBRARY (the same rule the Library's badges use):
  *
- *   source=mock    icons on the mock branch   (REPO_BRANCH, default CRM_UI_LIBRARY_ICON_TOOL)
+ *   source=mock    icons on the mock branch   (REPO_BRANCH, default MOCK_BRANCH)
  *                  status "master_verified" when master has the same drawing, else "mock_verified"
- *   source=master  icons on the master branch (MASTER_REPO_BRANCH, default CRM_UI_LIBRARY_ICON_BRANCH_CLONE)
+ *   source=master  icons on the master branch (MASTER_REPO_BRANCH, default master)
  *                  status "master_verified"
  *
  * Routes (deployed under /server/iconShare/…):

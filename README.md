@@ -244,10 +244,10 @@ Catalyst Console environment variables (see `.env.example`):
 
 ```
 REPO_BASE_URL=https://repository.zohocorpcloud.in
-REPO_PROJECT_PATH=zohocorp/CRM/CRM_UI/CRM_UI_LIBRARY
-REPO_NAME=CRM_UI_LIBRARY
-REPO_BRANCH=CRM_UI_LIBRARY_ICON_TOOL
-REPO_GIT_URL=https://zrepository.zohocorpcloud.in/zohocorp/CRM/CRM_UI/CRM_UI_LIBRARY.git
+REPO_PROJECT_PATH=zohocorp/ICON_LIBRARY/Icons/crm_core_icons
+REPO_NAME=crm_core_icons
+REPO_BRANCH=MOCK_BRANCH
+REPO_GIT_URL=https://zrepository.zohocorpcloud.in/zohocorp/ICON_LIBRARY/Icons/crm_core_icons.git
 REPO_TOKEN=<personal access token>     # never commit this
 REPO_TOKEN_USER=oauth2                 # username paired with the token (basic auth)
 REPO_PROVIDER=git                      # git | gitlab | gitea | github
