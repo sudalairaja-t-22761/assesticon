@@ -27,8 +27,21 @@
     canCommit: null,       // from the server: may the signed-in user commit? (null = not known yet)
     commitRestrictedReason: null,
     source: null,     // { svg, styles } when the workspace was loaded from this folder
-    loading: false
+    loading: false,
+    // The master branch of the same repository, shown under the mock branch (read only here: it changes through
+    // approved requests). Same fields as above, filled from api/master-branch.
+    masterBranch: { config: null, files: [], missing: [], lastSyncAt: null, lastCommit: null, lastCommitInfo: null, error: null }
   };
+
+  // The two branches of the panel: the mock branch is the editable one (Add / Replace Icons, commit from the generator).
+  var BRANCHES = {
+    mock:   { api: 'api/master-library', label: 'Mock branch' },
+    master: { api: 'api/master-branch',  label: 'Master branch' }
+  };
+  function _key(key) { return key === 'master' ? 'master' : 'mock'; }
+  function _data(key) { return _key(key) === 'master' ? state.masterLibrary.masterBranch : state.masterLibrary; }
+  function _api(key, p) { return _url(BRANCHES[_key(key)].api + (p || '')); }
+  function _section(key) { return $('.ml-branch-section[data-ml-branch="' + _key(key) + '"]'); }
 
   // The server fetches the branch on the first call; never leave the panel "Loading…" forever.
   var REPO_TIMEOUT_MS = 90000;
@@ -66,7 +79,8 @@
     return !!window.SF_AUTH_ENABLED && !(state.auth && state.auth.isAuthenticated);
   }
 
-  function _cfg() {
+  function _cfg(key) {
+    if (_key(key) === 'master') return state.masterLibrary.masterBranch.config || {};
     return state.masterLibrary.config || REPO_DEFAULTS || {};
   }
 
@@ -84,21 +98,21 @@
     } catch (e) { return iso; }
   }
 
-  function _fileWebUrl(name) {
-    var files = (_cfg().files || []);
+  function _fileWebUrl(name, key) {
+    var files = (_cfg(key).files || []);
     for (var i = 0; i < files.length; i++) if (files[i].name === name) return files[i].webUrl || '';
     return '';
   }
 
-  function _pairs() {
-    var pairs = _cfg().pairs || [];
+  function _pairs(key) {
+    var pairs = _cfg(key).pairs || [];
     if (pairs.length) return pairs;
     // Fallback: every svg on its own
-    return (_cfg().files || []).filter(function (f) { return f.kind === 'sprite'; }).map(function (f) { return { svg: f.name, styles: null }; });
+    return (_cfg(key).files || []).filter(function (f) { return f.kind === 'sprite'; }).map(function (f) { return { svg: f.name, styles: null }; });
   }
 
-  function _entry(name) {
-    var files = state.masterLibrary.files || [];
+  function _entry(name, key) {
+    var files = _data(key).files || [];
     for (var i = 0; i < files.length; i++) if (files[i].name === name) return files[i];
     return null;
   }
@@ -107,12 +121,15 @@
   // Rendering
   // ───────────────────────────────────────────────────────────────────────────
 
-  function _renderHeader() {
-    var cfg = _cfg();
-    var ml  = state.masterLibrary;
-    $('#mlFolderName').text(cfg.folder || 'Master_ui_library');
-    $('#mlRepoLink').attr('href', cfg.webUrl || cfg.baseUrl || '#').text(cfg.repoName || cfg.projectPath || 'repository');
-    $('#mlBranch').text(cfg.branch || '');
+  function _renderHeader(key) {
+    if (!key) { _renderHeader('mock'); _renderHeader('master'); return; }
+    var cfg = _cfg(key);
+    var ml  = _data(key);
+    var $s  = _section(key);
+    // The panel holds both branches, so it is named after the repository they belong to.
+    $('#mlFolderName').text(_cfg().repoName || _cfg().projectPath || 'repository');
+    $s.find('.ml-repo-link').attr('href', cfg.webUrl || cfg.baseUrl || '#').text(BRANCHES[_key(key)].label);
+    $s.find('.ml-branch-name').text(cfg.branch || '');
     var meta = ['Live from repository'];
     var info = ml.lastCommitInfo || {};
     if (ml.lastCommit) {
@@ -124,11 +141,11 @@
     if (ml.lastSyncAt) meta.push('Fetched ' + _fmtDate(ml.lastSyncAt));
     if (cfg.configured === false) meta.push('Repository token not configured');
     if (ml.error) meta.push('Error: ' + ml.error);
-    $('#mlMeta').text(meta.join(' · ')).attr('title', info.subject || '');
+    $s.find('.ml-meta').text(meta.join(' · ')).attr('title', info.subject || '');
   }
 
-  function _fileRow(name) {
-    var e = _entry(name);
+  function _fileRow(name, key) {
+    var e = _entry(name, key);
     var ext = String(name.split('.').pop() || '').toLowerCase();
     var badge = ext === 'svg' ? 'svg-badge' : 'css-badge';
     var html = '<div class="saved-file-item ml-file' + (e ? '' : ' ml-file-missing') + '" data-name="' + _esc(name) + '">';
@@ -153,11 +170,12 @@
     return html;
   }
 
-  function _renderGrid() {
-    var $grid = $('#mlFilesGrid');
+  function _renderGrid(key) {
+    var $grid = _section(key).find('.ml-files-grid');
     if (!$grid.length) return;
-    var cfg = _cfg();
-    var pairs = _pairs();
+    var cfg = _cfg(key);
+    var pairs = _pairs(key);
+    var editable = _key(key) === 'mock';
 
     if (!pairs.length) {
       $grid.html('<div class="saved-empty"><p>No repository files configured (REPO_FILES).</p></div>');
@@ -166,7 +184,7 @@
 
     var html = '';
     pairs.forEach(function (p) {
-      var svgEntry = _entry(p.svg);
+      var svgEntry = _entry(p.svg, key);
       var hasSvg = !!svgEntry;
       html += '<div class="saved-folder-card ml-card" data-svg="' + _esc(p.svg) + '" data-styles="' + _esc(p.styles || '') + '">';
       html += '<div class="saved-folder-header">';
@@ -176,23 +194,35 @@
       html += '<div class="saved-folder-date">' + _esc(cfg.branch || '') + '</div>';
       html += '</div></div>';
       html += '<div class="saved-folder-files">';
-      html += _fileRow(p.svg);
-      if (p.styles) html += _fileRow(p.styles);
+      html += _fileRow(p.svg, key);
+      if (p.styles) html += _fileRow(p.styles, key);
       html += '</div>';
       html += '<div class="saved-folder-actions ml-actions">';
-      html += '<button class="btn btn-primary btn-sm ml-edit-btn"' + (hasSvg ? '' : ' disabled title="Not found in the repository branch"') + '>';
-      html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Add / Replace Icons</button>';
+      if (editable) {
+        html += '<button class="btn btn-primary btn-sm ml-edit-btn"' + (hasSvg ? '' : ' disabled title="Not found in the repository branch"') + '>';
+        html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Add / Replace Icons</button>';
+      }
       html += '<button class="btn btn-ghost btn-sm ml-view-btn" data-name="' + _esc(p.svg) + '"' + (hasSvg ? '' : ' disabled') + '>';
       html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> View</button>';
       html += '<button class="btn btn-ghost btn-sm ml-download-btn"' + (hasSvg ? '' : ' disabled') + '>';
       html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button>';
-      var web = _fileWebUrl(p.svg);
-      html += '<a class="btn btn-ghost btn-sm ml-open-repo" href="' + _esc(web || cfg.webUrl || '#') + '" target="_blank" rel="noopener">';
-      html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg> Repository</a>';
+      // The link to the file in the repository is for admins only.
+      if (_isAdmin()) {
+        var web = _fileWebUrl(p.svg, key);
+        html += '<a class="btn btn-ghost btn-sm ml-open-repo" href="' + _esc(web || cfg.webUrl || '#') + '" target="_blank" rel="noopener">';
+        html += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg> Repository</a>';
+      }
       html += '</div></div>';
     });
     $grid.html(html);
   }
+
+  function _isAdmin() { return !!(SF.wf && SF.wf.role === 'admin'); }
+
+  /** The role arrives after the panel may have been drawn (workflow.js): draw the cards again for it. */
+  SF.refreshMasterLibraryRole = function () {
+    ['mock', 'master'].forEach(function (key) { if (_data(key).files.length) _renderGrid(key); });
+  };
 
   function _setBusy(busy, label) {
     state.masterLibrary.loading = !!busy;
@@ -218,36 +248,41 @@
     }
     $panel.removeClass('hidden');
     _renderHeader();
-    if (!state.masterLibrary.files.length) {
-      $('#mlFilesGrid').html('<div class="saved-empty ml-loading"><p>Loading files from repository…</p></div>');
-    }
+    _loadBranch('mock', $panel);
+    _loadBranch('master', $panel);
+  };
 
+  function _loadBranch(key, $panel) {
+    var $grid = _section(key).find('.ml-files-grid');
+    if (!_data(key).files.length) {
+      $grid.html('<div class="saved-empty ml-loading"><p>Loading files from repository…</p></div>');
+    }
     $.ajax({
-      url: _url('api/master-library'),
+      url: _api(key),
       type: 'GET',
       dataType: 'json',
       timeout: REPO_TIMEOUT_MS,
       headers: _authHeaders(),
-      success: function (data) { _applyListing(data); },
+      success: function (data) { _applyListing(data, key); },
       error: function (xhr, status) {
         if (xhr && xhr.status === 401) {
           $panel.addClass('hidden');
           return;
         }
         var data = xhr && xhr.responseJSON;
-        if (data && data.files && data.files.length) { _applyListing(data); return; }
+        if (data && data.files && data.files.length) { _applyListing(data, key); return; }
         var msg = _xhrMessage(xhr, status, 'Could not read the repository from the server.');
-        state.masterLibrary.error = msg;
-        _renderHeader();
-        $('#mlFilesGrid').html('<div class="saved-empty"><p>' + _esc(msg) + '</p></div>');
+        _data(key).error = msg;
+        _renderHeader(key);
+        $grid.html('<div class="saved-empty"><p>' + _esc(msg) + '</p></div>');
       }
     });
-  };
+  }
 
-  /** Apply a GET /api/master-library (or /sync, /save) payload to state and re-render. */
-  function _applyListing(data) {
+  /** Apply a GET /api/master-library or /api/master-branch (or /sync, /save) payload to that branch's state and re-render. */
+  function _applyListing(data, key) {
     if (!data) return;
-    var ml = state.masterLibrary;
+    var ml = _data(key);
     ml.config = data.repo || ml.config;
     if (data.files) ml.files = data.files;
     if (data.missing) ml.missing = data.missing;
@@ -255,12 +290,12 @@
     if ('lastCommit' in data) ml.lastCommit = data.lastCommit || null;
     if ('lastCommitInfo' in data) ml.lastCommitInfo = data.lastCommitInfo || null;
     ml.error = data.success === false ? (data.message || data.error || 'Repository error') : (data.error || null);
-    if ('canCommit' in data) {
+    if (_key(key) === 'mock' && 'canCommit' in data) {
       ml.canCommit = !!data.canCommit;
       ml.commitRestrictedReason = data.commitRestrictedReason || null;
     }
-    _renderHeader();
-    _renderGrid();
+    _renderHeader(key);
+    _renderGrid(key);
   }
 
   /** Blocking popup for a refused commit. */
@@ -299,7 +334,7 @@
   // Shared helpers for the Library page (repo-library-icons.js).
   SF.masterLibraryUrl = _url;
   SF.masterLibraryAuthHeaders = _authHeaders;
-  SF.masterLibraryConfig = _cfg;
+  SF.masterLibraryConfig = function () { return _cfg(); };
   SF.fetchMasterLibraryFile = function (name) { return _fetchFileText(name); };
   SF.isMasterLibrarySignedOut = _isSignedOut;
 
@@ -310,6 +345,17 @@
   SF.syncMasterLibrary = function (opts) {
     opts = opts || {};
     _setBusy(true, 'Pulling latest files from repository…');
+    // The master branch is refreshed alongside (its own request; a failure there shows in its line of the panel).
+    $.ajax({
+      url: _api('master', '/sync'), type: 'POST', dataType: 'json', timeout: REPO_TIMEOUT_MS, headers: _authHeaders(),
+      success: function (data) { _applyListing(data, 'master'); },
+      error: function (xhr, status) {
+        var data = xhr && xhr.responseJSON;
+        if (data && data.files) { _applyListing(data, 'master'); return; }
+        _data('master').error = _xhrMessage(xhr, status, 'Sync failed');
+        _renderHeader('master');
+      }
+    });
     $.ajax({
       url: _url('api/master-library/sync'),
       type: 'POST',
@@ -344,26 +390,31 @@
 
   SF.testMasterLibraryConnection = function () {
     _setBusy(true, 'Testing repository connection…');
-    $.ajax({
-      url: _url('api/master-library/test-connection'),
-      type: 'POST',
-      dataType: 'json',
-      timeout: REPO_TIMEOUT_MS,
-      headers: _authHeaders(),
-      complete: function (xhr, status) {
-        _setBusy(false, '');
-        var data = xhr.responseJSON || {};
-        SF.showToast((data.success ? 'Repository OK: ' : 'Repository error: ') +
-          (data.detail || data.message || _xhrMessage(xhr, status, 'no answer')) +
-          (data.engine ? ' [' + data.engine + ']' : ''));
-      }
+    var keys = ['mock', 'master'], results = {}, left = keys.length;
+    keys.forEach(function (key) {
+      $.ajax({
+        url: _api(key, '/test-connection'),
+        type: 'POST',
+        dataType: 'json',
+        timeout: REPO_TIMEOUT_MS,
+        headers: _authHeaders(),
+        complete: function (xhr, status) {
+          var data = xhr.responseJSON || {};
+          results[key] = BRANCHES[key].label + (data.success ? ' OK: ' : ' error: ') +
+            (data.detail || data.message || _xhrMessage(xhr, status, 'no answer')) +
+            (data.engine ? ' [' + data.engine + ']' : '');
+          if (--left) return;
+          _setBusy(false, '');
+          SF.showToast(keys.map(function (k) { return results[k]; }).join(' · '));
+        }
+      });
     });
   };
 
-  function _fetchFileText(name) {
+  function _fetchFileText(name, key) {
     return new Promise(function (resolve, reject) {
       $.ajax({
-        url: _url('api/master-library/file?name=' + encodeURIComponent(name)),
+        url: _api(key, '/file?name=' + encodeURIComponent(name)),
         type: 'GET',
         dataType: 'text',
         timeout: REPO_TIMEOUT_MS,
@@ -405,30 +456,30 @@
     });
   };
 
-  SF.viewMasterLibraryFile = function (name) {
+  SF.viewMasterLibraryFile = function (name, key) {
     if (!name) return;
-    var target = _url('api/master-library/file?name=' + encodeURIComponent(name));
+    var target = _api(key, '/file?name=' + encodeURIComponent(name));
     var sessionId = _authHeaders()['x-session-id'];
     if (sessionId) target += '&session_id=' + encodeURIComponent(sessionId);
     window.open(target, '_blank');
   };
 
-  SF.downloadMasterLibraryPair = function (svgName, stylesName) {
-    var jobs = [_fetchFileText(svgName)];
-    if (stylesName) jobs.push(_fetchFileText(stylesName).catch(function () { return ''; }));
+  SF.downloadMasterLibraryPair = function (svgName, stylesName, key) {
+    var jobs = [_fetchFileText(svgName, key)];
+    if (stylesName) jobs.push(_fetchFileText(stylesName, key).catch(function () { return ''; }));
     Promise.all(jobs).then(function (res) {
       if (!stylesName || typeof JSZip === 'undefined') {
         SF.downloadFile(res[0], svgName, 'image/svg+xml');
         return;
       }
       var zip = new JSZip();
-      var folder = zip.folder(_cfg().folder || 'Master_ui_library');
+      var folder = zip.folder((_cfg().repoName || 'repository') + '_' + (_cfg(key).branch || _key(key)));
       folder.file(svgName, res[0] || '');
       if (res[1]) folder.file(stylesName, res[1]);
       zip.generateAsync({ type: 'blob' }).then(function (blob) {
         var a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = svgName.replace(/\.svg$/i, '') + '.zip';
+        a.download = svgName.replace(/\.svg$/i, '') + (_key(key) === 'master' ? '_master' : '') + '.zip';
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(a.href); }, 100);
         SF.showToast('Downloaded ' + svgName + (res[1] ? ' + ' + stylesName : ''));
@@ -587,10 +638,12 @@
       var $card = $(this).closest('.ml-card');
       SF.editMasterLibraryPair($card.data('svg'), $card.data('styles') || null);
     })
-    .on('click', '.ml-view-btn', function () { SF.viewMasterLibraryFile($(this).data('name')); })
+    .on('click', '.ml-view-btn', function () {
+      SF.viewMasterLibraryFile($(this).data('name'), $(this).closest('.ml-branch-section').attr('data-ml-branch'));
+    })
     .on('click', '.ml-download-btn', function () {
       var $card = $(this).closest('.ml-card');
-      SF.downloadMasterLibraryPair($card.data('svg'), $card.data('styles') || null);
+      SF.downloadMasterLibraryPair($card.data('svg'), $card.data('styles') || null, $card.closest('.ml-branch-section').attr('data-ml-branch'));
     })
     .on('change', '#fnameRepoCommit', _applyRepoCommitToggle)
     .on('change', '#fnameRepoSvg', function () {

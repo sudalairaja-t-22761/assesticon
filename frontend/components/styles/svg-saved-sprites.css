@@ -316,6 +316,13 @@
 
 .ml-repo-line svg { stroke: var(--text-tertiary); flex-shrink: 0; }
 
+/* One block per branch (mock, master) inside the repository panel */
+.ml-branch-section + .ml-branch-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
 .ml-repo-line a {
   color: var(--accent-text);
   font-weight: 600;

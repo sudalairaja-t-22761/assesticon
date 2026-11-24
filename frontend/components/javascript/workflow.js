@@ -140,7 +140,11 @@
       wf.role = r.role; wf.email = r.email; wf.menus = r.menus || null;
       $('#wfMembersBtn, #wfActivityLogBtn').toggleClass('hidden', r.role !== 'admin');
       applyMenus();
-    }).catch(function () { wf.role = null; wf.menus = null; $('#wfMembersBtn, #wfActivityLogBtn').addClass('hidden'); });
+      if (typeof SF.refreshMasterLibraryRole === 'function') SF.refreshMasterLibraryRole();
+    }).catch(function () {
+      wf.role = null; wf.menus = null; $('#wfMembersBtn, #wfActivityLogBtn').addClass('hidden');
+      if (typeof SF.refreshMasterLibraryRole === 'function') SF.refreshMasterLibraryRole();
+    });
   }
 
   function loadStatuses() {
@@ -582,6 +586,7 @@
     return api('GET', 'requests').then(function (r) {
       wf.requests = r.requests || [];
       if (r.role) wf.role = r.role;
+      if (typeof SF.refreshMasterLibraryRole === 'function') SF.refreshMasterLibraryRole();
       $('#wfMailTest, #wfCliqTest').toggleClass('hidden', wf.role !== 'admin');
       renderRequestsList();
       if (wf.openId) openRequest(wf.openId);
