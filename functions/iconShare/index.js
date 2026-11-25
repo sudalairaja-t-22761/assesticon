@@ -27,7 +27,9 @@
  *     defaults: { colorClass, sizeClass, strokeClass },  ← the starting value of each variable ("" = no class)
  *     package: { name, version } | null,      ← the npm package (and its version) of the branch the drawing is on
  *     categories: ["Stroke icons", …],        ← the icon's Library categories
- *     hasOptions: true | false }              ← the Library offers Size + Stroke width for this icon (see `options`)
+ *     hasOptions: true | false,               ← the Library offers Size + Stroke width for this icon (see `options`)
+ *     suggestedIcons: ["mail1", "mailer", …] } ← other verified icons of the same source with a similar NAME, best first
+ *                                               (same name + number, one name starts with the other, a shared word)
  *
  * Auth: SHARE_API_TOKEN via `x-api-token`, `Authorization: Bearer …` or `?token=`. On Catalyst every call is
  * refused until the token is set; locally (no Catalyst port) an empty token allows all.
@@ -53,6 +55,7 @@ const repoConfig = require("./lib/repo-config");
 const { createRepoClient } = require("./lib/repo-client");
 const { parseSprite } = require("./lib/icons");
 const categories = require("./lib/categories");
+const suggest = require("./lib/suggest");
 
 // ── configuration ────────────────────────────────────────────────────────────
 const SOURCES = {};
@@ -190,11 +193,12 @@ async function allIcons(fresh) {
         .concat(master.icons.filter((i) => !onBoth.has(i.sprite + ":" + i.symbolId)));
     return { icons, commit: { mock: mock.commit, master: master.commit }, fetchedAt: mock.fetchedAt, stale: mock.stale || master.stale };
 }
-/** Icons of a source, each with its Library categories and whether Size + Stroke width apply to it. */
+/** Icons of a source, each with its Library categories, whether Size + Stroke width apply to it, and its suggested icons. */
 async function read(req, source) {
     const fresh = bool(req.query.refresh);
     const [r, index] = await Promise.all([source === "all" ? allIcons(fresh) : iconsOf(source, fresh), categories.load(req, CACHE_MS, fresh)]);
-    return { ...r, icons: r.icons.map((i) => ({ ...i, ...categories.of(index, i.name) })) };
+    const similar = suggest.index(source + "|" + JSON.stringify(r.commit), r.icons);
+    return { ...r, icons: r.icons.map((i) => ({ ...i, ...categories.of(index, i.name), suggestedIcons: similar.get(i.name) || [] })) };
 }
 
 function sourceOf(req, res) {
