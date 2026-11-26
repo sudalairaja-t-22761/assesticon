@@ -9,6 +9,9 @@
     // save-assets function: GET lists a user's Savedassest/<username>/ tree, POST saves images.
     // It has no local copy, so local dev calls the deployed one.
     window.SF_SAVE_ASSETS_API = (isLocal ? '//' + cloudHost : location.origin) + '/server/save-assets/';
+    // npm helper on the admin's own machine (scripts/npm-publisher.js --serve): checks the npm login and publishes after a
+    // push. The cloud and the browser cannot reach the office npm registry, so the page asks this machine instead.
+    window.SF_NPM_HELPER_URL   = ['http', '//127.0.0.1:47615'].join(':');
     window.SF_AUTH_ENABLED     = true;
     window.SF_AUTH_STORAGE_KEY = 'sf_session_id';
 

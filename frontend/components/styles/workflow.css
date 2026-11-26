@@ -97,6 +97,9 @@
 .vf-detail-head { display: flex; gap: 12px; align-items: center; }
 .vf-detail-head img { width: 56px; height: 56px; border: 1px solid var(--border-light); border-radius: 6px; padding: 8px; }
 .vf-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* A disabled action (Push / Re-publish before the npm login) must look disabled, not just ignore the click. */
+.vf-actions .btn:disabled, .vf-modal .btn:disabled { opacity: .45; cursor: not-allowed; filter: grayscale(.6); box-shadow: none; }
+.vf-actions .btn:disabled:hover, .vf-modal .btn:disabled:hover { transform: none; }
 .vf-actions select { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); color: var(--text-primary); }
 .vf-timeline { list-style: none; margin: 0; padding: 0; font-size: 12px; color: var(--text-secondary); display: grid; gap: 6px; }
 .vf-timeline b { color: var(--text-primary); }

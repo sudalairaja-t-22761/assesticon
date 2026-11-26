@@ -23,10 +23,15 @@
  *   PATCH  /api/icon-categories/:id     → { name?, options? }                                                       [admin]
  *   DELETE /api/icon-categories/:id     → not the built-in Stroke icons category                                    [admin]
  *   PUT    /api/icon-categories/:id/icons → { names[], enabled }  add / remove icons                                [admin]
- *   POST   /api/release/published       → { status: published|failed, name, version, tag, branch, commit?, subject?, error?, commits[]? }
+ *   POST   /api/release/published       → { status: published|failed, name, version, tag, branch, commit?, subject?, error?, commits[]?, machine?, npmUser? }
  *                                         commits = the icon commits in that release: their requests get the result in the timeline
  *                                         mail every admin (+ RELEASE_NOTIFY_EMAILS) the publish result. Called by
  *                                         scripts/npm-publisher.js; header x-release-token = RELEASE_NOTIFY_TOKEN
+ *   POST   /api/release/helper-code     → { code, minutes }  a short-lived code for the npm helper setup command           [admin]
+ *   GET    /api/release/helper-setup?code=… → a shell script that installs the npm helper (scripts/npm-publisher.js --serve)
+ *                                         on the admin's machine; run as  curl -fsSL '<url>' | bash
+ *   POST   /api/release/helper-report?code=… → { text }  what the setup command printed (sent by the script itself)
+ *   GET    /api/release/helper-report?code=… → { found, at, text }  shown in the setup dialog on "Check again"
  *   GET    /api/release/republish       → { branches: { <branch>: [commitSha] } }  the re-publishes admins asked for; polled by
  *                                         scripts/npm-publisher.js (same x-release-token), which answers through /release/published
  *   POST   /api/requests/:id/republish  → admin asks the npm publisher to publish a pushed request again            [admin]
@@ -661,7 +666,7 @@ function createWorkflowRouter({ requireSession, repos }) {
         if (expiresAt === null) return res.status(400).json({ success: false, message: "Access expiration must be a valid future date" });
         const approverType = parseApprover(req.body.approverType);
         if (approverType === null) return res.status(400).json({ success: false, message: "approverType must be none, designer or ui" });
-        const fields = { userEmail, userName: str(req.body.userName, 200) || userEmail, memberType, approverType, expiresAt, userAvatar: /^(https?:\/\/|proxy:)/i.test(req.body.userAvatar || "") ? str(req.body.userAvatar, 500) : "", addedBy: me(req).email || "" };
+        const fields = { userEmail, userName: str(req.body.userName, 200) || userEmail, memberType, approverType, expiresAt, userAvatar: /^(https?:[/]{2}|proxy:)/i.test(req.body.userAvatar || "") ? str(req.body.userAvatar, 500) : "", addedBy: me(req).email || "" };
         const saved = existing ? await db.update("members", existing.ROWID, fields) : await db.insert("members", fields);
         res.json({ success: true, member: saved });
     }));
@@ -802,6 +807,8 @@ function createWorkflowRouter({ requireSession, repos }) {
         const status = b.status === "failed" ? "failed" : "published";
         const r = { status, name: str(b.name, 120), version: str(b.version, 60), tag: str(b.tag, 40), branch: str(b.branch, 120),
             commit: str(b.commit, 64), subject: str(b.subject, 300), error: str(b.error, 1500) };
+        // Which machine and npm user did it (the helper on the pushing admin's machine, or the office publisher).
+        const by = [str(b.npmUser, 80) && "npm user " + str(b.npmUser, 80), str(b.machine, 80) && "machine " + str(b.machine, 80)].filter(Boolean).join(", ");
         const validVersion = /^\d+\.\d+\.\d+(-[\w.-]+)?$/.test(r.version);
         // A failure may come before the version is known (e.g. the branch could not be read).
         if (!r.name || !r.branch || (status === "published" ? !validVersion : r.version && !validVersion)) {
@@ -816,7 +823,7 @@ function createWorkflowRouter({ requireSession, repos }) {
         const adminOut = await Promise.all(admins.map((to) => tell(req, to, msg, cliq.releaseCard(req, { release: r }))));
         for (const o of adminOut) (o.mail.ok ? sent : failed).push(o.mail.ok ? o.to : { to: o.to, error: o.mail.error });
         const botFailed = adminOut.filter((o) => !o.cliq.ok).map((o) => ({ to: o.to, error: o.cliq.error }));
-        console.log(`[release] ${r.name}@${r.version || "?"} (${r.tag}) ${status} on ${r.branch}: mailed ${sent.length} admin(s)${failed.length ? ", failed " + failed.length : ""}; Cliq ${adminOut.length - botFailed.length}${botFailed.length ? ", failed " + botFailed.length : ""}`);
+        console.log(`[release] ${r.name}@${r.version || "?"} (${r.tag}) ${status} on ${r.branch}${by ? " by " + by : ""}: mailed ${sent.length} admin(s)${failed.length ? ", failed " + failed.length : ""}; Cliq ${adminOut.length - botFailed.length}${botFailed.length ? ", failed " + botFailed.length : ""}`);
         // The pushed requests whose icon commit is in this release: record the result on the request + its timeline.
         const commits = (Array.isArray(b.commits) ? b.commits : []).map((c) => str(c, 64).toLowerCase()).filter((c) => /^[0-9a-f]{7,64}$/.test(c));
         let requests = 0;
@@ -827,7 +834,7 @@ function createWorkflowRouter({ requireSession, repos }) {
                 if (q.releaseStatus === "published") continue; // already recorded (a later failure is about newer icons)
                 await db.update("icon_requests", q.ROWID, { releaseStatus: status, releaseVersion: r.version, releaseTag: r.tag, releaseError: status === "failed" ? r.error.slice(0, 500) : "" });
                 await db.insert("request_events", { requestId: String(q.ROWID), actor: "npm publisher", action: status === "published" ? "npm_published" : "npm_publish_failed",
-                    note: status === "published" ? `${r.name}@${r.version} · tag ${r.tag}` : `${r.version || "version not set"}: ${r.error.slice(0, 400)}` });
+                    note: (status === "published" ? `${r.name}@${r.version} · tag ${r.tag}` : `${r.version || "version not set"}: ${r.error.slice(0, 400)}`) + (by ? ` · ${by}` : "") });
                 // The requester gets the version of their icon (an admin requester already got the admin message).
                 const to = norm(q.requestedBy);
                 if (to && !admins.includes(to)) {
@@ -839,6 +846,86 @@ function createWorkflowRouter({ requireSession, repos }) {
             }
         }
         res.json({ success: true, sent: sent.length, failed, cliqFailed: botFailed, requests, local: !(req.headers["x-zc-projectid"] || req.headers["x-zc-admin-cred-token"]) });
+    }));
+
+    // ── npm helper setup (one command on the admin's machine) ───────────────────────────────────────────────────
+    // The page cannot install anything: an admin whose machine has no helper gets ONE command to paste into Terminal.
+    // POST /release/helper-code (admin session) signs a 15 minute code; GET /release/helper-setup?code=… (no session:
+    // curl has none) answers with the install script. The script carries RELEASE_NOTIFY_TOKEN, hence the signed code.
+    const HELPER_CODE_MIN = 15;
+    const helperKey = () => String(process.env.RELEASE_NOTIFY_TOKEN || "");
+    const helperSign = (text) => crypto.createHmac("sha256", helperKey()).update("npm-helper:" + text).digest("base64url");
+    const safeUrl = (u) => (/^https?:[/]{2}[\w.-]+(:\d+)?(\/[\w.\/-]*)?$/.test(String(u || "")) && String(u).length < 300 ? String(u) : "");
+    const shq = (v) => "'" + String(v).replace(/'/g, "'\\''") + "'";
+    const b64 = (text) => Buffer.from(text, "utf8").toString("base64");
+    const plainValue = (v) => /^[\w@:/.+-]+$/.test(String(v || ""));
+    /** The publisher script: the repository's own file on a local run, the copy bundled by "npm run build:helper" when deployed. */
+    function helperSource() {
+        const fsx = require("fs"), pathx = require("path");
+        for (const file of [pathx.join(__dirname, "..", "..", "..", "scripts", "npm-publisher.js"), pathx.join(__dirname, "..", "helper", "npm-publisher.js")]) {
+            try { return { publisher: fsx.readFileSync(file, "utf8"), release: fsx.readFileSync(pathx.join(__dirname, "..", "lib", "npm-release.js"), "utf8") }; }
+            catch (_) { /* the other place */ }
+        }
+        return null;
+    }
+
+    router.post("/release/helper-code", requireSession, requireRole(["admin"]), wrap(async (req, res) => {
+        if (helperKey().length < 24) throw fail(503, "RELEASE_NOTIFY_TOKEN is not set on the server");
+        const api = safeUrl(req.body && req.body.api), origin = safeUrl(req.body && req.body.origin);
+        if (!api || !origin) throw fail(400, "The page address is missing");
+        const payload = Buffer.from(JSON.stringify({ exp: Date.now() + HELPER_CODE_MIN * 60000, api: api.replace(/\/+$/, ""), origin: origin.replace(/\/+$/, "") })).toString("base64url");
+        console.log(`[release] npm helper setup code issued to ${me(req).email || "?"}`);
+        res.json({ success: true, code: payload + "." + helperSign(payload), minutes: HELPER_CODE_MIN });
+    }));
+
+    router.get("/release/helper-setup", wrap(async (req, res) => {
+        // Piped into bash: every answer is a script, also the refusals.
+        const say = (msg) => res.type("text/plain").send("echo " + shq("✗ " + msg) + "\nexit 1\n");
+        const [payload, sig] = String(req.query.code || "").split(".");
+        const want = payload && helperKey().length >= 24 ? helperSign(payload) : "";
+        if (!want || !sig || sig.length !== want.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want))) {
+            return say("This setup command is not valid. Open npm login in the tool again and copy the new command.");
+        }
+        let p = {}; try { p = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) || {}; } catch (_) { /* refused below */ }
+        if (!(p.exp > Date.now()) || !safeUrl(p.api) || !safeUrl(p.origin)) return say("This setup command has expired. Open npm login in the tool again and copy the new command.");
+        const src = helperSource();
+        if (!src) return say("The server has no copy of the npm helper (deploy it with: npm run deploy).");
+        // The same repository settings this server uses, so the helper releases the same branches the same way.
+        const keep = ["REPO_GIT_URL", "REPO_NPM_REGISTRY", "REPO_NPM_DIR", "REPO_VERSION_MAX", "REPO_BRANCH", "REPO_VERSION_TAG", "REPO_NPM_DIST_TAG",
+            "MASTER_REPO_BRANCH", "MASTER_REPO_VERSION_TAG", "MASTER_REPO_NPM_DIST_TAG"];
+        const env = ["RELEASE_NOTIFY_URL=" + p.api + "/published", "RELEASE_NOTIFY_TOKEN=" + helperKey(), "PUBLISHER_ORIGINS=" + p.origin]
+            .concat(keep.filter((k) => plainValue(process.env[k])).map((k) => k + "=" + process.env[k])).join("\n") + "\n";
+        const fill = { PUBLISHER: b64(src.publisher), RELEASE: b64(src.release), ENV: b64(env), ORIGIN: shq(p.origin),
+            REPORT_URL: shq(p.api + "/helper-report?code=" + String(req.query.code)),
+            GIT_URL: shq(plainValue(process.env.REPO_GIT_URL) ? process.env.REPO_GIT_URL : "") };
+        res.type("text/plain").send(HELPER_SETUP_SH.replace(/__([A-Z_]+?)__/g, (m, k) => (k in fill ? fill[k] : m)));
+    }));
+
+    // What the setup command printed on the admin's machine: the script posts it here when it ends, and the setup dialog
+    // shows it on "Check again" — a failed setup can then be diagnosed from the page, without access to that machine.
+    const reportKey = (code) => crypto.createHash("sha256").update(String(code)).digest("hex").slice(0, 24);
+    function helperCode(req) {
+        const code = String(req.query.code || "");
+        const [payload, sig] = code.split(".");
+        const want = payload && helperKey().length >= 24 ? helperSign(payload) : "";
+        if (!want || !sig || sig.length !== want.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want))) throw fail(403, "Invalid setup code");
+        return code;
+    }
+    router.post("/release/helper-report", wrap(async (req, res) => {
+        const key = reportKey(helperCode(req)), db = store.forRequest(req);
+        const text = str(req.body && req.body.text, 20000).slice(-4000); // the end is where a failure shows
+        const day = Date.now() - 864e5;
+        for (const old of await db.all("helper_reports")) {
+            if (old.key === key || !(new Date(old.at).getTime() > day)) await db.remove("helper_reports", old.ROWID).catch(() => {});
+        }
+        await db.insert("helper_reports", { key, at: new Date().toISOString(), text });
+        console.log(`[release] npm helper setup report (${text.length} chars): ${text.split("\n").filter((l) => /^[✗!]/.test(l.trim())).join(" | ").slice(0, 600) || "no errors"}`);
+        res.json({ success: true });
+    }));
+    router.get("/release/helper-report", wrap(async (req, res) => {
+        const key = reportKey(helperCode(req));
+        const r = (await store.forRequest(req).all("helper_reports")).filter((x) => x.key === key).sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+        res.json({ success: true, found: !!r, at: r ? r.at : "", text: r ? r.text : "" });
     }));
 
     // ── icon categories (filter chips; Size + Stroke width in the Library preview) ──
@@ -1187,5 +1274,119 @@ function createWorkflowRouter({ requireSession, repos }) {
 
     return router;
 }
+
+// The npm helper setup script (GET /api/release/helper-setup). Files travel as base64 and are written with node, which
+// the helper needs anyway. macOS: a login item keeps the helper running; elsewhere the start command is printed.
+// (String.raw: the text below is bash, nothing in it is a JavaScript escape or placeholder.)
+const HELPER_SETUP_SH = String.raw`#!/bin/bash
+set -uo pipefail
+echo "Setting up the SpriteForge npm helper (npm login + publish from this machine)..."
+for c in node npm git; do
+  command -v "$c" >/dev/null 2>&1 || { echo "✗ $c is not installed. Install it and run the command again."; exit 1; }
+done
+# Everything lives in one folder of your own (settings and log too), so no other folder needs to be writable.
+DIR="$HOME/.sf-npm-helper"
+LABEL="com.spriteforge.npm-publisher"
+LOG="$DIR/helper.log"
+ORIGIN=__ORIGIN__
+GIT_URL=__GIT_URL__
+REPORT_URL=__REPORT_URL__
+# What this command prints is also sent to the tool when it ends, so a failed setup can be diagnosed from the page.
+OUT="$(mktemp 2>/dev/null || echo "/tmp/sf-npm-helper-setup.$$")"
+report() {
+  sleep 1
+  node -e 'process.stdout.write(JSON.stringify({ text: require("fs").readFileSync(process.argv[1], "utf8").slice(-6000) }))' "$OUT" 2>/dev/null \
+    | curl -s -m 20 -X POST -H "Content-Type: application/json" --data-binary @- "$REPORT_URL" >/dev/null 2>&1
+  rm -f "$OUT" 2>/dev/null
+}
+trap report EXIT
+exec > >(tee -a "$OUT") 2>&1
+stop() { echo "✗ $1"; echo "  Send a screenshot of this whole output to the tool's admin."; exit 1; }
+echo "  user: $(id -un) (id $(id -u)) · home: $HOME · node $(node -v 2>/dev/null) · $(uname -sr)"
+# Run with sudo, the files would belong to root and the helper could never be used by your own login.
+[ "$(id -u)" = "0" ] && stop "do not run this command with sudo. Run it again as yourself, without sudo."
+[ -w "$HOME" ] || stop "your home folder $HOME is not writable by you."
+# A folder left by an earlier attempt (for example one made with sudo) is replaced: removed, or moved aside if it cannot be removed.
+if [ -e "$DIR" ]; then
+  pkill -f "$DIR/npm-publisher.js" 2>/dev/null || true
+  rm -rf "$DIR" 2>/dev/null
+  if [ -e "$DIR" ]; then
+    OLD="$DIR.old.$(date +%s)"
+    mv "$DIR" "$OLD" 2>/dev/null && echo "! the old helper folder could not be removed (owned by another user?) - moved to $OLD" \
+      || stop "the old folder $DIR cannot be removed or moved. Fix with:  sudo rm -rf \"$DIR\"  and run the command again."
+  fi
+fi
+put() { node -e 'require("fs").writeFileSync(process.argv[1], Buffer.from(process.argv[2], "base64"))' "$1" "$2"; }
+mkdir -p "$DIR" || stop "cannot create $DIR (permission denied?). Fix with:  sudo chown -R \"$(id -un)\" \"$HOME/.sf-npm-helper\""
+[ -w "$DIR" ] || stop "$DIR is not writable by you. Fix with:  sudo chown -R \"$(id -un)\" \"$DIR\"  and run the command again."
+put "$DIR/npm-publisher.js" "__PUBLISHER__" || stop "could not write $DIR/npm-publisher.js"
+put "$DIR/npm-release.js" "__RELEASE__" || stop "could not write $DIR/npm-release.js"
+put "$DIR/sf-npm-publisher.env" "__ENV__" || stop "could not write $DIR/sf-npm-publisher.env"
+chmod 600 "$DIR/sf-npm-publisher.env"
+echo "✓ helper files written to $DIR"
+
+SL='/'
+P='http'
+NODE="$(command -v node)"
+BIN="$(dirname "$NODE"):$(dirname "$(command -v npm)"):$(dirname "$(command -v git)"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Started by hand: runs until this machine restarts (used when the login item cannot be installed).
+start_now() {
+  pkill -f "$DIR/npm-publisher.js" 2>/dev/null || true
+  PATH="$BIN" nohup "$NODE" "$DIR/npm-publisher.js" --serve >> "$LOG" 2>&1 &
+  disown 2>/dev/null || true
+  echo "✓ helper started (it runs until this machine restarts)."
+  echo "  After a restart, start it again with:  PATH=\"$BIN\" nohup \"$NODE\" \"$DIR/npm-publisher.js\" --serve >> \"$LOG\" 2>&1 &"
+}
+
+if [ "$(uname)" = "Darwin" ]; then
+  AGENTS="$HOME/Library/LaunchAgents"
+  PLIST="$AGENTS/$LABEL.plist"
+  if [ -f "$PLIST" ] && ! grep -q "$DIR/npm-publisher.js" "$PLIST"; then
+    echo "✓ this Mac already runs the npm publisher from the tool's folder - nothing else to install."
+  else
+    mkdir -p "$AGENTS" 2>/dev/null
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    if {
+      echo '<?xml version="1.0" encoding="UTF-8"?>'
+      echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "'"$P"s:$SL$SL'www.apple.com/DTDs/PropertyList-1.0.dtd">'
+      echo '<plist version="1.0"><dict>'
+      echo "  <key>Label</key><string>$LABEL</string>"
+      echo "  <key>ProgramArguments</key><array><string>$NODE</string><string>$DIR/npm-publisher.js</string><string>--serve</string></array>"
+      echo "  <key>WorkingDirectory</key><string>$DIR</string>"
+      echo "  <key>EnvironmentVariables</key><dict><key>PATH</key><string>$BIN</string></dict>"
+      echo '  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer>'
+      echo "  <key>StandardOutPath</key><string>$LOG</string><key>StandardErrorPath</key><string>$LOG</string>"
+      echo '</dict></plist>'
+    } > "$PLIST" 2>/dev/null && launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
+      echo "✓ helper installed: it starts by itself at every login (log: $LOG)"
+    else
+      echo "! the login item could not be installed ($AGENTS is not writable, or launchctl refused it)."
+      echo "  To make the helper start by itself later:  sudo chown -R \"$(id -un)\" \"$AGENTS\"  and run the setup command again."
+      rm -f "$PLIST" 2>/dev/null
+      start_now
+    fi
+  fi
+else
+  start_now
+fi
+
+sleep 4
+FAILED=0
+STATUS="$(curl -s -m 30 -H "Origin: $ORIGIN" "$P:$SL$SL"127.0.0.1:47615/status || true)"
+case "$STATUS" in
+  *'"loggedIn":true'*) echo "✓ helper is running and answers the tool's page." ;;
+  *'"ok":true'*) echo "✓ helper is running and answers the tool's page." ;;
+  *) FAILED=1; echo "✗ the helper is not answering. Its log:"; tail -15 "$LOG" 2>/dev/null || echo "  (no log at $LOG)"
+     echo "  Program on port 47615:"; lsof -nP -iTCP:47615 -sTCP:LISTEN 2>/dev/null | tail -2 || true
+     echo "  Send a screenshot of this whole output to the tool's admin." ;;
+esac
+if [ -n "$GIT_URL" ] && ! GIT_TERMINAL_PROMPT=0 git ls-remote --heads "$GIT_URL" >/dev/null 2>&1; then
+  echo "! git cannot read the icon repository yet. Run once and enter your ZohoRepository login:  git ls-remote $GIT_URL"
+fi
+if [ "$FAILED" = "1" ]; then echo "Setup did NOT finish: the helper is not running."; else
+echo "Done. Go back to the tool, click 'Check again' and log in with your npm username and password."; fi
+echo "(This output is sent to the tool so its admin can see how the setup went.)"
+echo "If the page still says the helper is not answering: use Chrome or Edge and allow 'local network access' for the tool's site (icon left of the address bar), then reload."
+`;
 
 module.exports = { createWorkflowRouter };

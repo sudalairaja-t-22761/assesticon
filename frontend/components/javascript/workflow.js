@@ -567,8 +567,8 @@
       var on = stageOf(r) === 'master' ? 'on master' : 'on mock', rel = releaseState(r);
       return '<span class="vf-pill vf-pill-pushed">' + on + (rel === 'published' ? ' · v' + esc(r.releaseVersion) : '') + '</span>' +
         (rel === 'failed' ? ' <span class="vf-pill vf-pill-rejected" title="' + esc(r.releaseError || '') + '">npm publish failed</span>'
-          : rel === 'requested' ? ' <span class="vf-pill vf-pill-pending" title="An admin asked for the npm publish again; the office npm publisher answers on its next run">re-publish requested…</span>'
-          : rel === 'pending' ? ' <span class="vf-pill vf-pill-pending" title="The office npm publisher bumps the version, publishes it, then pushes the version">publishing…</span>' : '');
+          : rel === 'requested' ? ' <span class="vf-pill vf-pill-pending" title="An admin asked for the npm publish again; it is published when an admin logs in to npm and presses Re-publish">re-publish requested…</span>'
+          : rel === 'pending' ? ' <span class="vf-pill vf-pill-pending" title="Not published to npm yet: an admin logs in to npm on the request and presses Re-publish">not published yet…</span>' : '');
     }
     return pill(r.status);
   }
@@ -858,11 +858,15 @@
         actions += '<button class="btn btn-ghost btn-sm vf-pill" data-vf-req-del="' + esc(r.ROWID) + '" type="button" style="color:var(--danger)' + (wf.role === 'admin' && (r.status === 'pending' || r.status === 'approved') ? '' : ';margin-left:auto') + '">Delete request</button>';
       }
       var target = esc(TARGETS[r.targetSprite] || r.targetSprite);
+      // The push also publishes to npm from this admin's machine, so Push stays disabled until this machine is logged in to npm.
+      var npmGate = '<button class="btn btn-ghost btn-sm vf-pill" id="wfNpmLoginBtn" type="button" title="Log in to the npm registry on this machine. The push publishes the new package version under this npm user.">npm login</button>' +
+        '<span class="vf-msg" id="wfNpmState">Checking the npm login of this machine…</span>';
+      var pushOff = ' disabled title="Log in to npm first"', needNpm = !!res.canPush;
       if (res.canPush === 'mock') {
-        actions += '<button class="btn btn-primary btn-sm" id="wfPushBtn" type="button">Push to mock · ' + target + '</button>';
+        actions += '<button class="btn btn-primary btn-sm" id="wfPushBtn" type="button"' + pushOff + '>Push to mock · ' + target + '</button>' + npmGate;
       } else if (res.canPush === 'master') {
         actions += '<input id="wfReviewNote" type="text" placeholder="Note (optional)">' +
-          '<button class="btn btn-primary btn-sm" id="wfPushBtn" type="button">Approve &amp; push to master · ' + target + '</button>' +
+          '<button class="btn btn-primary btn-sm" id="wfPushBtn" type="button"' + pushOff + '>Approve &amp; push to master · ' + target + '</button>' + npmGate +
           '<button class="btn btn-ghost btn-sm" id="wfDeclineBtn" type="button" style="color:var(--danger)">Decline</button>';
       } else if (r.status === 'approved') {
         actions += '<span class="vf-msg">Both audits passed — waiting for push approval. An admin will push it to the ' + (stageOf(r) === 'master' ? 'master' : 'mock') + ' branch.</span>';
@@ -872,12 +876,12 @@
       if (r.status === 'pushed' && rel !== 'published' && (rel || wf.role === 'admin')) {
         actions += '<span class="vf-msg">' + (rel === 'failed' ? '<b style="color:var(--danger)">npm publish failed</b>' + (r.releaseError ? ': ' + esc(r.releaseError) : '') +
             '<br>The icon is on the branch; the package version is pushed only after a successful publish.'
-          : rel === 'requested' ? 'Re-publish requested' + (r.republishBy ? ' by ' + esc(r.republishBy) : '') + ' — the office npm publisher answers within about a minute.' +
-            (askedAgo > 3e5 ? ' No answer yet: check that the publisher is running on the office Mac (VPN on).' : '')
-          : rel === 'pending' ? 'Publishing to npm — the package version is pushed to the branch only after the publish succeeds.'
+          : rel === 'requested' ? 'Re-publish requested' + (r.republishBy ? ' by ' + esc(r.republishBy) : '') + ', but no result came back. Log in to npm and press Re-publish.'
+          : rel === 'pending' ? 'Not published to npm yet (pushed without an npm login, for example from Cliq). Log in to npm and press Re-publish.'
           : 'No npm publish result was recorded for this request.') + '</span>';
-        if (wf.role === 'admin' && r.pushCommitSha && (rel !== 'requested' || askedAgo > 3e5)) {
-          actions += '<button class="btn btn-primary btn-sm" id="wfRepublishBtn" type="button" title="Ask the office npm publisher to publish again. A commit that is already in a published version is reported with that version, not published twice.">Re-publish to npm</button>';
+        if (wf.role === 'admin' && r.pushCommitSha) { // published from this admin's machine, under the admin's own npm login
+          actions += '<button class="btn btn-primary btn-sm" id="wfRepublishBtn" type="button" disabled title="Log in to npm first">Re-publish to npm</button>' + npmGate;
+          needNpm = true;
         }
       }
       clearTimeout(wf.relTimer);
@@ -898,8 +902,144 @@
         }).join('') + '</ul></div>');
       wf.open = r;
       if (wf.role === 'admin' && r.status === 'pending') fillAssignDropdowns(r);
+      if (needNpm) checkNpmLogin();
     }).catch(fail);
   }
+
+  // ── npm login on this machine (the push publishes from here) ─────────────────────────────────────────────────
+  // The Catalyst cloud and the browser cannot reach the npm registry (office network only). A small helper on the
+  // admin's own machine (scripts/npm-publisher.js --serve, on localhost) checks the login and does the publish.
+  var NPM_HELPER_START = 'npm run publisher -- --serve';
+  function npmHelper(method, path, body) {
+    var base = String(window.SF_NPM_HELPER_URL || ('http' + ':' + '//127.0.0.1:47615')).replace(/\/+$/, '');
+    return fetch(base + path, { method: method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined })
+      .catch(function () { var e = new Error('The npm helper is not running on this machine. Start it in the tool folder with: ' + NPM_HELPER_START); e.helperOff = true; throw e; })
+      .then(function (res) { return res.json().catch(function () { return { ok: false, error: 'The npm helper answered HTTP ' + res.status }; }); });
+  }
+  // state: in (a login for the next push is ready) | out (helper runs, no login yet) | off (no helper on this machine)
+  // The npm login is asked for EVERY push and stored nowhere: not in the browser, not on the machine. A successful
+  // login gives a one-time ticket (kept in this page's memory only) that the helper accepts for one publish within
+  // 10 minutes; after the push, or a reload, the admin logs in again.
+  try { sessionStorage.removeItem('sf_npm_login_user'); } catch (_) { /* the key an earlier version kept */ }
+  function npmLogin() { return wf.npmLogin && wf.npmLogin.exp > Date.now() ? wf.npmLogin : null; }
+  function takeNpmLogin() { var l = npmLogin(); wf.npmLogin = null; return l; } // one login, one push
+  function showNpmState(state) {
+    var l = state === 'in' ? npmLogin() : null, user = l ? l.user : '';
+    wf.npm = { state: state, user: user };
+    var title = state === 'in' ? 'Publishes the npm version as ' + user + ' (this login is used once)'
+      : state === 'out' ? 'Log in to npm first' : 'Set up npm login on this machine first';
+    $('#wfPushBtn, #wfRepublishBtn').prop('disabled', state !== 'in').attr('title', title);
+    $('#wfNpmLoginBtn').text(state === 'in' ? 'Change npm login' : 'npm login');
+    $('#wfNpmState').text(state === 'in' ? 'npm login OK as ' + user + ' — valid for one push in the next ' + Math.max(1, Math.round((l.exp - Date.now()) / 60000)) + ' min. Nothing is stored.'
+      : state === 'out' ? 'Log in with your npm username and password to enable this button. The login is asked for every push and is not stored.'
+      : 'npm login is not set up on this machine. Click "npm login", run the one-time setup, then log in to enable this button.');
+  }
+  function checkNpmLogin() {
+    return npmHelper('GET', '/status').then(function (st) {
+      // A helper installed before the one-time login keeps a saved login: it has to be set up again.
+      if (!st || !st.ok || !st.oneTimeLogin) { wf.npmOldHelper = !!(st && st.ok); showNpmState('off'); return; }
+      wf.npmOldHelper = false;
+      showNpmState(npmLogin() ? 'in' : 'out');
+    }).catch(function () { wf.npmOldHelper = false; showNpmState('off'); });
+  }
+  function npmLoginModalHtml() {
+    return '<div class="vf-modal-overlay hidden" id="wfNpmModal"><div class="vf-modal" role="dialog" aria-label="npm login">' +
+      '<div class="vf-modal-head"><h3>npm login</h3><button type="button" class="vf-modal-x" id="wfNpmClose" aria-label="Close">×</button></div>' +
+      '<div class="vf-modal-label">The login is checked by the npm helper on this machine. The password is sent only to the office npm registry and is not stored.</div>' +
+      '<input id="wfNpmUser" class="vf-input" type="text" maxlength="80" autocomplete="username" placeholder="npm username">' +
+      '<input id="wfNpmPass" class="vf-input" type="password" maxlength="200" autocomplete="current-password" placeholder="npm password" style="margin-top:8px">' +
+      '<div class="vf-modal-error hidden" id="wfNpmError"></div>' +
+      '<div class="vf-modal-foot"><button class="btn btn-primary btn-sm vf-pill" id="wfNpmSubmit" type="button">Login</button>' +
+        '<button class="btn btn-ghost btn-sm vf-pill" id="wfNpmCancel" type="button">Cancel</button></div></div></div>';
+  }
+  // No helper on this machine: the page cannot install one, so it shows ONE command to paste into Terminal once.
+  // The command downloads the helper from this server (a 15 minute code) and installs it; after that it starts at login.
+  function npmSetupModalHtml() {
+    return '<div class="vf-modal-overlay hidden" id="wfNpmSetup"><div class="vf-modal vf-modal-wide" role="dialog" aria-label="Set up npm login on this machine">' +
+      '<div class="vf-modal-head"><h3>Set up npm login on this machine</h3><button type="button" class="vf-modal-x" id="wfNpmSetupClose" aria-label="Close">×</button></div>' +
+      '<div class="vf-modal-label">The npm registry is reachable only inside the office network, so a small helper on your own machine does the npm login and the publish. ' +
+        'A web page cannot install it for you: paste this command <b>once</b> into Terminal (macOS, office network or VPN on, node and git installed). ' +
+        'After that the helper starts by itself every time you log in to this machine.</div>' +
+      '<textarea id="wfNpmSetupCmd" class="vf-input" readonly rows="3" style="width:100%;font-family:monospace;font-size:12px" placeholder="Preparing the command…"></textarea>' +
+      '<div class="vf-msg" id="wfNpmSetupNote"></div>' +
+      '<div class="vf-modal-error hidden" id="wfNpmSetupError"></div>' +
+      '<pre class="hidden" id="wfNpmSetupReport" style="max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:11px;margin:8px 0 0;padding:8px;border:1px solid var(--border, #d0d7e2);border-radius:6px"></pre>' +
+      '<div class="vf-modal-foot"><button class="btn btn-primary btn-sm vf-pill" id="wfNpmSetupCopy" type="button" disabled>Copy command</button>' +
+        '<button class="btn btn-ghost btn-sm vf-pill" id="wfNpmSetupCheck" type="button">Check again</button>' +
+        '<button class="btn btn-ghost btn-sm vf-pill" id="wfNpmSetupCancel" type="button">Close</button></div></div></div>';
+  }
+  function openNpmSetup() {
+    if (!$('#wfNpmSetup').length) $('body').append(npmSetupModalHtml());
+    $('#wfNpmSetupCmd').val(''); $('#wfNpmSetupCopy').prop('disabled', true); $('#wfNpmSetupError').addClass('hidden');
+    $('#wfNpmSetupReport').addClass('hidden').text(''); wf.npmSetupCode = '';
+    $('#wfNpmSetupNote').text((wf.npmOldHelper ? 'The npm helper on this machine is an older version that keeps a saved login. Run this command once more to replace it. ' : '') +
+      'Push stays disabled until this setup is done and you have logged in with your own npm username and password.');
+    $('#wfNpmSetup').removeClass('hidden');
+    var apiBase = new URL(SF.masterLibraryUrl('api/release'), window.location.href).href;
+    api('POST', 'release/helper-code', { api: apiBase, origin: window.location.origin }).then(function (res) {
+      wf.npmSetupCode = res.code;
+      $('#wfNpmSetupCmd').val("curl -fsSL '" + apiBase + '/helper-setup?code=' + res.code + "' | bash");
+      $('#wfNpmSetupCopy').prop('disabled', false);
+      $('#wfNpmSetupNote').text((wf.npmOldHelper ? 'The npm helper on this machine is an older version that keeps a saved login: run this command once more to replace it. ' : '') + 'The command works for ' + res.minutes + ' minutes and only sets up this tool\'s helper. When it prints "Done", click "Check again" and log in with your own npm username and password. Push stays disabled until then.');
+    }).catch(function (e) { $('#wfNpmSetupError').text(e.message).removeClass('hidden'); });
+  }
+  // The helper does not answer: show what the setup command printed on the machine it ran on (the script sends it).
+  function showNpmSetupReport() {
+    var $e = $('#wfNpmSetupError').removeClass('hidden'), $r = $('#wfNpmSetupReport').addClass('hidden');
+    var blocked = 'The setup finished and the helper answered there, but this page cannot reach it: the browser is blocking it. Use Chrome or Edge, allow "local network access" for this site (icon left of the address bar) and reload. Also make sure the command ran on THIS machine.';
+    if (!wf.npmSetupCode) { $e.text('The helper is not answering on this machine yet. Run the command in Terminal and wait for "Done".'); return; }
+    api('GET', 'release/helper-report?code=' + encodeURIComponent(wf.npmSetupCode)).then(function (res) {
+      if (!res.found) { $e.text('The helper is not answering, and this command has not been run yet (no result received). Copy it, paste it into Terminal on this machine, press Enter and wait for "Done".'); return; }
+      var ok = /helper is running and answers/.test(res.text) && !/^\s*✗/m.test(res.text);
+      $e.text(ok ? blocked : 'The setup command ran but did not finish correctly. This is what it printed (send a screenshot of this to the tool\'s admin):');
+      $r.text(res.text + '\n— received ' + new Date(res.at).toLocaleTimeString()).removeClass('hidden');
+    }).catch(function (e) { $e.text('The helper is not answering on this machine yet (' + e.message + ').'); });
+  }
+  $(document).on('click', '#wfNpmSetupClose, #wfNpmSetupCancel', function () { $('#wfNpmSetup').addClass('hidden'); });
+  $(document).on('click', '#wfNpmSetupCopy', function () {
+    var el = $('#wfNpmSetupCmd')[0], $b = $(this);
+    var done = function () { $b.text('Copied'); setTimeout(function () { $b.text('Copy command'); }, 1500); };
+    el.focus(); el.select();
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(el.value).then(done, function () { document.execCommand('copy'); done(); });
+    else { document.execCommand('copy'); done(); }
+  });
+  $(document).on('click', '#wfNpmSetupCheck', function () {
+    var $b = $(this).prop('disabled', true).text('Checking…');
+    checkNpmLogin().then(function () {
+      $b.prop('disabled', false).text('Check again');
+      if (wf.npm.state === 'off' && wf.npmOldHelper) { $('#wfNpmSetupError').text('The helper on this machine is still the older version. Run the command above in Terminal, wait for "Done", then check again.').removeClass('hidden'); return; }
+      if (wf.npm.state === 'off') { showNpmSetupReport(); return; }
+      $('#wfNpmSetup').addClass('hidden');
+      if (wf.npm.state === 'out') $('#wfNpmLoginBtn').trigger('click'); // helper is there: now the username + password
+    });
+  });
+
+  $(document).on('click', '#wfNpmLoginBtn', function () {
+    if (wf.npm && wf.npm.state === 'off') { openNpmSetup(); return; } // no helper here yet: the one-time setup command
+    if (!$('#wfNpmModal').length) $('body').append(npmLoginModalHtml());
+    $('#wfNpmUser').val(''); $('#wfNpmPass').val(''); $('#wfNpmError').addClass('hidden');
+    $('#wfNpmModal').removeClass('hidden');
+    setTimeout(function () { $($('#wfNpmUser').val() ? '#wfNpmPass' : '#wfNpmUser').trigger('focus'); }, 30);
+  });
+  $(document).on('click', '#wfNpmClose, #wfNpmCancel', function () { $('#wfNpmPass').val(''); $('#wfNpmModal').addClass('hidden'); });
+  $(document).on('keydown', '#wfNpmUser, #wfNpmPass', function (e) { if (e.key === 'Enter') $('#wfNpmSubmit').trigger('click'); });
+  $(document).on('click', '#wfNpmSubmit', function () {
+    var user = $('#wfNpmUser').val().trim(), pass = $('#wfNpmPass').val();
+    if (!user || !pass) { $('#wfNpmError').text('Enter your npm username and password').removeClass('hidden'); return; }
+    var $b = $(this).prop('disabled', true).text('Checking…');
+    npmHelper('POST', '/login', { username: user, password: pass }).then(function (out) {
+      if (!out || !out.ok) throw new Error((out && out.error) || 'npm login failed');
+      $('#wfNpmModal').addClass('hidden');
+      if (!out.ticket) throw new Error('the npm helper on this machine is an older version — click "npm login" and run the setup command again');
+      wf.npmLogin = { user: out.user, ticket: out.ticket, exp: Date.now() + (out.minutes || 10) * 60000 - 15000 };
+      showNpmState('in');
+      window.alert('npm login successful as ' + out.user + '. The button is now enabled for one push. Nothing is stored: the next push asks for the login again.');
+    }).catch(function (e) {
+      if (e.helperOff) { showNpmState('off'); $('#wfNpmModal').addClass('hidden'); openNpmSetup(); return; } // the helper stopped meanwhile
+      if (!wf.npm || wf.npm.state !== 'in') showNpmState('out');
+      window.alert('npm login failed: ' + e.message);
+    }).then(function () { $('#wfNpmPass').val(''); $b.prop('disabled', false).text('Login'); });
+  });
 
   // Dropdowns come from the user list, filtered by role.
   function fillAssignDropdowns(r) {
@@ -977,9 +1117,11 @@
 
   // Push: add the single icon to the chosen sprite of the request's branch (mock or master), then record it.
   $(document).on('click', '#wfPushBtn', function () {
+    var login = takeNpmLogin(); // used for this push only
+    if (!login) { showNpmState(wf.npm && wf.npm.state === 'off' ? 'off' : 'out'); window.alert('Log in to npm first: every push asks for your npm username and password.'); return; }
     var r = wf.open, stage = stageOf(r), $btn = $(this).prop('disabled', true);
-    var file = r.targetSprite + '.svg', pushedVersion = null, alreadyThere = false, releaseOff = false, releasePending = false, releaseExternal = false;
-    var done = function () { $btn.prop('disabled', false); };
+    var file = r.targetSprite + '.svg', pushedVersion = null, alreadyThere = false, releaseOff = false, releasePending = false, releaseExternal = false, npmOut = null;
+    var done = function () { checkNpmLogin(); }; // the login is used up: the button stays disabled until the next login
     var icon = { symbolId: r.symbolId, sprite: r.sprite }, drawing = '', replaceId = '';
     // Compare first: same drawing already there → just record it; same name with another drawing → replace that icon.
     loadRepoIds().then(function () {
@@ -1029,24 +1171,44 @@
       return api('POST', 'requests/' + r.ROWID + '/push', { commitSha: (out && out.commit) || '', version: pushedVersion || '', alreadyThere: alreadyThere, drawing: drawing })
         .then(function () { return out; });
     }).then(function (out) {
+      // The server only committed the icon (it cannot reach the registry): this machine publishes the version now.
+      if (!releaseExternal || alreadyThere || !wf.branches[stage]) return out;
+      SF.showToast('Pushed — publishing the npm version from this machine…');
+      return npmHelper('POST', '/publish', { branch: wf.branches[stage], ticket: login.ticket })
+        .then(function (res) { npmOut = res || { ok: false, error: 'no answer' }; }, function (e) { npmOut = { ok: false, error: e.message }; })
+        .then(function () { return out; });
+    }).then(function (out) {
       var on = ' on the ' + BRANCH_LABEL[stage].toLowerCase();
       SF.showToast((alreadyThere ? 'The same icon is already' + on + (out && out.as && normId(out.as) !== normId(r.symbolId) ? ' as ' + out.as : '') + ' — recorded'
         : (replaceId ? 'Replaced ' + replaceId + ' in ' : 'Pushed to ') + file + on) +
-        (releaseExternal ? ' · the office npm publisher now bumps the version, publishes it and pushes the version (the requester and the admins get a mail and a Cliq message)'
+        (npmOut && npmOut.ok && npmOut.state === 'published' ? ' · published ' + npmOut.version + ' to npm as ' + (npmOut.user || 'this machine')
+          : npmOut && npmOut.ok && npmOut.state === 'dryrun' ? ' · npm helper is in dry-run mode: ' + npmOut.version + ' was NOT published'
+          : npmOut && !npmOut.ok ? ' · the icon is pushed, but the npm publish failed: ' + npmOut.error + ' — open the request and press Re-publish to npm'
+          : npmOut && npmOut.ok ? ' · the version was already published from another machine'
+          : releaseExternal ? ' · not published to npm yet — open the request and press Re-publish to npm'
           : pushedVersion ? (releasePending ? ' · version ' + pushedVersion + ' committed — the office npm publisher publishes it within a minute' : ' · published ' + pushedVersion) : '') +
         (releaseOff ? ' · no version bump / npm publish: the release is switched off on this server (REPO_NPM_PUBLISH)' : ''));
       resetRepoIds();
       return Promise.all([loadRequests(), loadStatuses()]);
-    }).catch(function (e) { if (!e || !e.cancelled) fail(e); }).then(done);
+    }).catch(function (e) { if (e && e.cancelled) wf.npmLogin = login; else fail(e); }).then(done); // cancelled before anything was pushed: the login is still unused
   });
 
-  // Admin asks the office npm publisher to publish a pushed request again (failed, or no result came back).
+  // Admin publishes a pushed request again (failed, or pushed without an npm login): from this machine, under the
+  // admin's own npm login. The backend marks the request, the helper publishes and reports the result to the request.
   $(document).on('click', '#wfRepublishBtn', function () {
-    var r = wf.open, $b = $(this).prop('disabled', true);
+    var login = takeNpmLogin(); // used for this publish only
+    if (!login) { showNpmState(wf.npm && wf.npm.state === 'off' ? 'off' : 'out'); window.alert('Log in to npm first: every publish asks for your npm username and password.'); return; }
+    var r = wf.open, $b = $(this).prop('disabled', true), branch = wf.branches[stageOf(r)];
     api('POST', 'requests/' + r.ROWID + '/republish').then(function () {
-      SF.showToast('Re-publish requested for ' + r.iconName + ' — the office npm publisher answers within about a minute');
+      SF.showToast('Publishing ' + r.iconName + ' to npm from this machine…');
+      return npmHelper('POST', '/publish', { branch: branch, ticket: login.ticket });
+    }).then(function (res) {
+      if (!res || !res.ok) throw new Error('npm publish failed: ' + ((res && res.error) || 'no answer from the npm helper'));
+      SF.showToast(res.state === 'published' ? 'Published ' + res.version + ' to npm as ' + (res.user || login.user)
+        : res.state === 'dryrun' ? 'npm helper is in dry-run mode: ' + res.version + ' was NOT published'
+        : r.iconName + ' is already in a published version — the request is updated');
       return loadRequests();
-    }).catch(function (e) { fail(e); $b.prop('disabled', false); });
+    }).catch(function (e) { fail(e); loadRequests().catch(function () {}); checkNpmLogin(); });
   });
 
   // A required reason: asks again while it is empty; null when cancelled.

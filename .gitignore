@@ -34,3 +34,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Copy of scripts/npm-publisher.js bundled into the function at deploy (npm run build:helper)
+functions/spriteForgeJoin/helper/
