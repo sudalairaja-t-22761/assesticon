@@ -107,7 +107,7 @@ const REQUEST_ACTIONS = {
     npm_republish_requested: ["publish", "Re-publish requested"],
     cliq_sent: ["notify", "Cliq message sent"], cliq_failed: ["notify", "Cliq message failed", false], notify_failed: ["notify", "Notification failed", false]
 };
-const TOOL_LABEL = { npm_login: ["npm", "npm login"], helper_setup_code: ["setup", "npm helper setup started"], helper_setup_report: ["setup", "npm helper setup"] };
+const TOOL_LABEL = { library_icon_deleted: ["request", "Library icon deleted"], npm_login: ["npm", "npm login"], helper_setup_code: ["setup", "npm helper setup started"], helper_setup_report: ["setup", "npm helper setup"] };
 
 /**
  * Everything for the admin page.

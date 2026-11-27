@@ -1967,19 +1967,9 @@
       }
       $('#multiUploadModal').addClass('hidden');
       if (multiUploadFlow === 'single') {
-        pendingSingleUpload = multiUploadSelection[0] || null;
-        if (pendingSingleUpload) {
-          var savedSingleIcon = pendingSingleUpload;
-          SF.saveSingleIconToLibrary(
-            savedSingleIcon.name,
-            buildStandaloneIconSvg(savedSingleIcon),
-            {
-              onSuccess: function () {
-                removeIconsFromWorkspace([savedSingleIcon]);
-              }
-            }
-          );
-        }
+        // An uploaded icon is NOT added to the Library here: it stays in the icon list and is added when the sprite
+        // is generated (Create Sprite or Update Sprite), together with the other new icons.
+        if (multiUploadSelection[0]) SF.showToast('"' + multiUploadSelection[0].name + '" is in the icon list. It is added to the Library when you generate the sprite.');
         pendingSingleUpload = null;
         multiUploadSelection = [];
       } else {
@@ -2296,6 +2286,24 @@
       var iconId = $(this).data('iconId');
       var iconName = $(this).data('iconName') || 'this icon';
       if (!iconId) return;
+      // A repository icon: admin only, and only while it is unverified (checked again now, the card may be old).
+      var repoSymbol = $(this).data('repoSymbol');
+      if (repoSymbol) {
+        var repoIcon = ((SF.repoLib && SF.repoLib.icons) || []).filter(function (i) { return i.id === iconId; })[0];
+        if (!(SF.wf && SF.wf.role === 'admin')) { SF.showToast('Only an admin can delete an unverified icon'); return; }
+        if (!repoIcon || typeof SF.wfStatusOf !== 'function' || SF.wfStatusOf(repoIcon) !== 'unverified') { SF.showToast('Only an unverified icon can be deleted'); return; }
+        var $del = $(this);
+        SF.confirmDelete(String(iconName), { what: 'icon', note: 'It is removed from the Library repository sprite. This cannot be undone here.' }).then(function (yes) {
+          if (!yes) return;
+          $del.prop('disabled', true).addClass('is-busy');
+          SF.deleteIconFromRepo(String(repoSymbol), String(iconName)).then(function (res) {
+            $del.removeClass('is-busy');
+            if (res && res.ok && SF.wfTrack) SF.wfTrack('library_icon_deleted', { detail: String(iconName) + ' (' + repoSymbol + ')' });
+            else $del.prop('disabled', false);
+          });
+        });
+        return;
+      }
       SF.confirmDelete(String(iconName), { what: 'icon' }).then(function (yes) {
         if (yes) SF.deleteLibraryIcon(iconId);
       });

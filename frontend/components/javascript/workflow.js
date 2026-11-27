@@ -133,6 +133,8 @@
   }
 
   function fail(e) { SF.showToast(e && e.message ? e.message : 'Something went wrong'); }
+  // Something only the page knows, for the admin Activity Log (never blocks, never shows an error).
+  SF.wfTrack = function (type, fields) { api('POST', 'activity/track', $.extend({ type: type }, fields || {})).catch(function () {}); };
 
   // ── identity / status ────────────────────────────────────────────────────
   function loadMe() {

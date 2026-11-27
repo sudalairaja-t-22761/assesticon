@@ -958,6 +958,14 @@
       if (!icon.svgContent && isHostedMode()) lazyHosted.push(index);
       var isSelected = !!(SF.libState.selected && SF.libState.selected[icon.id]);
       var isRepo = icon.source === 'repo';
+      // A repository icon can be deleted only by an admin and only while it is unverified (no request, not on a branch).
+      var isAdmin = !!(SF.wf && SF.wf.role === 'admin');
+      var unverified = isRepo && icon.symbolId && typeof SF.wfStatusOf === 'function' && SF.wfStatusOf(icon) === 'unverified';
+      var repoDel = isRepo && isAdmin && unverified;
+      var delOff = isRepo ? !repoDel : icon.canDelete === false;
+      var delTip = !isRepo ? (icon.canDelete === false ? 'Managed in repository' : 'Delete')
+        : repoDel ? 'Delete this unverified icon from the Library (admin)'
+        : !isAdmin ? 'Only an admin can delete an unverified icon' : 'Only an unverified icon can be deleted';
       var title = icon.name + (isRepo ? ' — ' + icon.sprite + '.svg (repository)' : '');
 
       var cardHtml = '<div class="lib-card lib-select-card' + (isSelected ? ' lib-selected' : '') + (isRepo ? ' lib-card-repo' : '') + '" data-icon-id="' + SF.escapeAttr(icon.id) + '" title="' + SF.escapeAttr(title) + '">' +
@@ -976,7 +984,7 @@
           (isRepo && icon.symbolId ? '<button class="btn btn-ghost btn-sm library-replace-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-symbol-id="' + SF.escapeAttr(icon.symbolId) + '" data-icon-name="' + SF.escapeAttr(icon.name) + '" data-tooltip="Replace with a new SVG (same place in the sprite) and commit" aria-label="Replace icon">' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>' +
           '</button>' : '') +
-          '<button class="btn btn-ghost btn-sm library-delete-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-icon-name="' + SF.escapeAttr(icon.name) + '" style="color:var(--danger);" data-tooltip="' + (icon.canDelete === false ? 'Managed in repository' : 'Delete') + '" aria-label="Delete"' + (icon.canDelete === false ? ' disabled' : '') + '>' +
+          '<button class="btn btn-ghost btn-sm library-delete-btn" data-icon-id="' + SF.escapeAttr(icon.id) + '" data-icon-name="' + SF.escapeAttr(icon.name) + '" style="color:var(--danger);" data-tooltip="' + delTip + '" aria-label="Delete"' + (delOff ? ' disabled' : '') + (repoDel ? ' data-repo-symbol="' + SF.escapeAttr(icon.symbolId) + '"' : '') + '>' +
             '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
           '</button>' +
         '</div>' +

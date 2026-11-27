@@ -59,6 +59,9 @@
           for (var d = 0; d < child.childNodes.length; d++) {
             var dc = child.childNodes[d];
             if (dc.nodeType === Node.ELEMENT_NODE) {
+              // Illustrator puts the icon's <style> INSIDE <defs>. Kept there it would land in the sprite's <defs>
+              // and never be treated as style: read it as the icon's style.
+              if (dc.tagName.toLowerCase() === 'style') { styleContent += (dc.textContent || '') + '\n'; continue; }
               defsContent += serializer.serializeToString(dc);
             }
           }

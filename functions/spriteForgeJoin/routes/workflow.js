@@ -534,6 +534,11 @@ function createWorkflowRouter({ requireSession, repos }) {
     // password). Kept for the Activity Log.
     router.post("/activity/track", requireSession, requireRole(), wrap(async (req, res) => {
         const b = req.body || {};
+        if (b.type === "library_icon_deleted") { // an admin deleted an unverified icon from the Library
+            if (req.role !== "admin") throw fail(403, "Only an admin can delete a Library icon");
+            await activity.track(req, "library_icon_deleted", { ok: true, email: me(req).email, name: me(req).name, detail: str(b.detail, 200) });
+            return res.json({ success: true });
+        }
         if (b.type !== "npm_login") throw fail(400, "Unknown activity type");
         await activity.track(req, "npm_login", { ok: !!b.ok, email: me(req).email, name: me(req).name, npmUser: str(b.npmUser, 80), machine: str(b.machine, 80),
             error: b.ok ? "" : str(b.error, 300), detail: b.ok ? "valid for one push, nothing stored" : "" });

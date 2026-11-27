@@ -104,9 +104,15 @@
         if (options.overrideName && total === 1) {
           parseName = options.overrideName + '.svg';
         }
-        var icon = SF.parseSVGFile(e.target.result, parseName);
-        if (icon) {
-          if (options.overrideName && total === 1) {
+        // One plain SVG with several icons drawn side by side (an exported row of artboards) is separated: every
+        // icon becomes its own entry in the list, named <file>-1, <file>-2 … Any other SVG is one icon.
+        var parts = !options.noSpriteDetect && typeof SF.explodeIconSheet === 'function' ? SF.explodeIconSheet(parseName, String(e.target.result || '')) : null;
+        var sources = parts && parts.length > 1 ? parts : [{ name: parseName, text: e.target.result, whole: true }];
+        if (!sources[0].whole) SF.showToast(file.name + ': ' + sources.length + ' icons drawn side by side, added as separate icons');
+        sources.forEach(function (src) {
+          var icon = SF.parseSVGFile(src.text, src.name);
+          if (!icon) return;
+          if (src.whole && options.overrideName && total === 1) {
             icon.name = SF.cleanFileName(options.overrideName);
           }
           var conflict = SF.iconNameConflict(icon.name);
@@ -117,12 +123,10 @@
             icon.symbolId = SF.makeSymbolId(icon.name);
             state.icons.push(icon);
             addedIcons.push(icon);
-
-            if (total === 1 && !options.skipAutoSave && typeof SF.saveSingleIconToLibraryFolder === 'function') {
-              SF.saveSingleIconToLibraryFolder(icon.name, e.target.result, options.folderName);
-            }
+            // Not added to the Library on upload: new icons go to the Library when the sprite is generated
+            // (SF.autoAddIconsToIconRepo in the Generate step of Create Sprite / Update Sprite).
           }
-        }
+        });
 
         pending--;
         if (pending === 0) {

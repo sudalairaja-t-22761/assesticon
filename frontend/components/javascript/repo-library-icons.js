@@ -136,16 +136,67 @@
     return false;
   }
 
+  /**
+   * The part of a sprite's shared CSS and <defs> that ONE icon really uses, so its standalone SVG carries nothing
+   * else (a class-styled icon used to drag the whole sprite's styles along: ~19 000 characters for a 2 KB icon).
+   * Lossless for the icon: a rule is kept when every class in its selector is used by the icon (a rule without a
+   * class, like ":root" or "path", is kept as it is); a <defs> entry is kept when the icon, a kept rule or another
+   * kept entry points to it (url(#id) / href="#id").
+   * @returns {{style:string, defs:string}}
+   */
+  function _onlyUsed(content, css, defs) {
+    css = String(css || '').replace(/\/\*[\s\S]*?\*\//g, '');
+    defs = String(defs || '');
+    var classesIn = function (markup, into) {
+      var m, re = /\bclass\s*=\s*["']([^"']*)["']/g;
+      while ((m = re.exec(markup)) !== null) m[1].split(/\s+/).forEach(function (k) { if (k) into[k] = true; });
+    };
+    var refsIn = function (text, into) {
+      var m, re = /url\(\s*["']?#([^"')\s]+)|(?:xlink:)?href\s*=\s*["']#([^"']+)["']/g;
+      while ((m = re.exec(text)) !== null) into[m[1] || m[2]] = true;
+    };
+    var used = {}, style = '', keptDefs = '', picked = {};
+    classesIn(content, used);
+    // Round by round until nothing new: kept rules can point to <defs>, and those entries can use classes again.
+    for (var round = 0; round < 6; round++) {
+      var before = Object.keys(used).length + Object.keys(picked).length;
+      style = css.replace(/([^{}]+)\{([^{}]*)\}/g, function (rule, sel, body) {
+        if (/^\s*@/.test(sel)) return rule;
+        var keep = sel.split(',').filter(function (one) {
+          var c, re = /\.(-?[_a-zA-Z][\w-]*)/g, any = false;
+          while ((c = re.exec(one)) !== null) { any = true; if (!used[c[1]]) return false; }
+          return any || !!one.trim();
+        });
+        return keep.length ? keep.join(',').trim() + '{' + body.trim() + '}' : '';
+      }).replace(/\s*\n\s*/g, '\n').trim();
+      var refs = {};
+      refsIn(content + style + keptDefs, refs);
+      Object.keys(refs).forEach(function (id) {
+        if (picked[id]) return;
+        var tag = new RegExp('<([a-zA-Z][\\w:-]*)\\b[^>]*\\bid\\s*=\\s*["\']' + _escRe(id) + '["\']').exec(defs);
+        var el = tag ? _findElement(defs, tag[1], id) : null;
+        if (!el) return;
+        picked[id] = defs.slice(el.start, el.end);
+        keptDefs += picked[id];
+        classesIn(picked[id], used);
+      });
+      if (Object.keys(used).length + Object.keys(picked).length === before) break;
+    }
+    return { style: style, defs: keptDefs };
+  }
+
   function _standaloneSvg(icon, spriteStyle, spriteDefs) {
     var content = icon.svgContent || '';
     var needsStyle = spriteStyle && /\bclass\s*=|var\(--/.test(content);
     var needsDefs  = spriteDefs && (/url\(\s*#|\b(xlink:)?href\s*=\s*["']#/.test(content) || (needsStyle && _classesUseDefs(content, spriteStyle)));
     var rootAttrs  = SF.buildPreviewAttrs(icon);
+    // Only this icon's share of the sprite's styles and <defs>, not all of them.
+    var own = needsStyle || needsDefs ? _onlyUsed(content, needsStyle ? spriteStyle : '', spriteDefs) : { style: '', defs: '' };
     return '<svg xmlns="' + SVG_NAMESPACE + '" xmlns:xlink="' + XLINK_NAMESPACE + '" viewBox="' +
       icon.originX + ' ' + icon.originY + ' ' + icon.width + ' ' + icon.height +
       '" width="' + _num(icon.width) + '" height="' + _num(icon.height) + '"' + rootAttrs + '>' +
-      (needsDefs ? '<defs>' + spriteDefs + '</defs>' : '') +
-      (needsStyle ? '<style>' + spriteStyle + '</style>' : '') +
+      (own.defs ? '<defs>' + own.defs + '</defs>' : '') +
+      (own.style ? '<style>' + own.style + '</style>' : '') +
       content + '</svg>';
   }
 
@@ -411,6 +462,28 @@
   }
 
   /**
+   * Serialise one separated icon with only the styles and <defs> entries it uses: every icon of a sheet is built with
+   * the whole sheet's <style> and clip boxes, most of which belong to the other icons.
+   */
+  function _slimSheetIcon(svgEl) {
+    var ser = new XMLSerializer(), css = '', defs = '', content = '';
+    var take = function (el, intoDefs) {
+      Array.prototype.forEach.call(el.children, function (c) {
+        var tag = _tagOf(c);
+        if (tag === 'style') css += (c.textContent || '') + '\n';
+        else if (tag === 'defs') take(c, true);
+        else if (intoDefs || !GRAPHIC[tag]) defs += ser.serializeToString(c);
+        else content += ser.serializeToString(c);
+      });
+    };
+    take(svgEl, false);
+    var own = _onlyUsed(content, css, defs);
+    var shell = svgEl.cloneNode(false);
+    var open = ser.serializeToString(shell).replace(/\/>\s*$/, '>').replace(/<\/svg>\s*$/, '');
+    return open + (own.defs ? '<defs>' + own.defs + '</defs>' : '') + (own.style ? '<style>' + own.style + '</style>' : '') + content + '</svg>';
+  }
+
+  /**
    * @returns {Array<{name, text}>|null} one standalone SVG per icon of the sheet (left to right, top to bottom),
    *          or null when the file is one ordinary icon.
    */
@@ -479,7 +552,7 @@
         var parent = out;
         wrappers.forEach(function (wr) { var shell = wr.cloneNode(false); parent.appendChild(shell); parent = shell; });
         b.els.sort(function (p, q) { return order.indexOf(p) - order.indexOf(q); }).forEach(function (el) { parent.appendChild(el.cloneNode(true)); });
-        return { name: base + '-' + (n + 1) + '.svg', text: new XMLSerializer().serializeToString(out) };
+        return { name: base + '-' + (n + 1) + '.svg', text: _slimSheetIcon(out) };
       });
     } catch (e) {
       return null; // could not be measured: keep the file as one icon
@@ -487,6 +560,8 @@
       document.body.removeChild(host);
     }
   }
+
+  SF.explodeIconSheet = _explodeSheet; // Create / Update Sprite uploads use it too (file-handler.js)
 
   /**
    * Uploaded files → one item per ICON. A sprite file (it has <symbol>s) is separated into its icons, each as its own
@@ -519,7 +594,7 @@
   }
 
   /** Commit a new sprite text to the icon repo. */
-  function _commit(svg, names) {
+  function _commit(svg, names, verb, prep) {
     var file = _spriteFiles()[0];
     return new Promise(function (resolve, reject) {
       $.ajax({
@@ -529,7 +604,7 @@
         contentType: 'application/json',
         dataType: 'json',
         timeout: SF.MASTER_LIBRARY_TIMEOUT_MS || 90000,
-        data: JSON.stringify({ files: [{ name: file.name, content: svg }], message: 'Add ' + names.join(', ') + ' to ' + file.name + ' via SpriteForge' }),
+        data: JSON.stringify({ files: [{ name: file.name, content: svg }], message: (verb || 'Add') + ' ' + names.join(', ') + ' ' + (prep || 'to') + ' ' + file.name + ' via SpriteForge' }),
         success: resolve,
         error: function (xhr, status) {
           var d = xhr.responseJSON;
@@ -715,6 +790,107 @@
       return result;
     });
   }
+
+  // ── remove ONE icon from the repo sprite (admin, unverified icons only — the Library card decides) ───────────
+
+  /**
+   * Take one icon out of the sprite TEXT: its <symbol>, the <g> its <use> points to, and the style rules and
+   * <defs> entries that only this icon used. Nothing else moves (the icon's slot stays empty).
+   * @returns {{svg:string}|{error:string}}
+   */
+  SF.removeIconFromSpriteText = function (spriteText, symbolId) {
+    var sym = _findElement(spriteText, 'symbol', symbolId);
+    if (!sym) return { error: symbolId + ' was not found in the sprite (it may have been changed in the repository — press Sync from repo)' };
+    var inner = spriteText.slice(sym.openEnd, sym.closeStart);
+    var useM = /<use\b[^>]*?(?:xlink:)?href\s*=\s*["']#([^"']+)["']/.exec(inner);
+    var g = useM ? _findElement(spriteText, 'g', useM[1]) : null;
+    var gone = inner + (g ? spriteText.slice(g.start, g.end) : '');
+    // cut the later piece first so the earlier positions stay valid
+    var cuts = [sym].concat(g ? [g] : []).sort(function (a, b) { return b.start - a.start; });
+    var out = spriteText;
+    cuts.forEach(function (c) { out = out.slice(0, c.start) + out.slice(c.end); });
+
+    // classes the removed artwork used (+ the icon's own .symbolId rule) that nothing left in the sprite uses
+    var classes = {}, m, cRe = /\bclass\s*=\s*["']([^"']*)["']/g;
+    while ((m = cRe.exec(gone)) !== null) m[1].split(/\s+/).forEach(function (k) { if (k) classes[k] = true; });
+    var still = {}, sRe = /\bclass\s*=\s*["']([^"']*)["']/g;
+    while ((m = sRe.exec(out)) !== null) m[1].split(/\s+/).forEach(function (k) { if (k) still[k] = true; });
+    var orphan = Object.keys(classes).filter(function (k) { return !still[k]; }).concat([symbolId]);
+    // An icon added by this tool has ONE private prefix on all its classes and ids ("nmwys0dwv0-", see _isolate).
+    // When nothing left in the artwork carries that prefix, everything with it goes: also the rules and clip boxes
+    // the icon brought along but never used itself.
+    var tokens = {};
+    Object.keys(classes).forEach(function (k) { var t = /^([nr][0-9a-z]{6,14}-)/.exec(k); if (t) tokens[t[1]] = true; });
+    var artwork = out.replace(/<defs\b[\s\S]*?<\/defs>/gi, '').replace(/<style\b[\s\S]*?<\/style>/gi, '');
+    var dead = Object.keys(tokens).filter(function (t) { return !new RegExp('\\bclass\\s*=\\s*["\'][^"\']*\\b' + _escRe(t)).test(artwork); });
+    var ruleBodies = '';
+    out = out.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, function (all, open, css, close) {
+      var kept = css.replace(/([^{}]+)\{([^{}]*)\}/g, function (rule, sel, body) {
+        if (/^\s*@/.test(sel)) return rule;
+        var keep = sel.split(',').filter(function (one) {
+          return !orphan.some(function (k) { return new RegExp('\\.' + _escRe(k) + '(?![\\w-])').test(one); }) &&
+            !dead.some(function (t) { return one.indexOf('.' + t) >= 0; });
+        });
+        if (keep.length === sel.split(',').length) return rule;
+        ruleBodies += body;
+        return keep.length ? keep.join(',') + '{' + body + '}' : '';
+      });
+      return open + kept.replace(/\n\s*\n+/g, '\n') + close;
+    });
+
+    // <defs> entries (clip boxes, gradients) that only the removed artwork / removed rules pointed to
+    var ids = {}, iRe = /url\(\s*["']?#([^"')\s]+)|(?:xlink:)?href\s*=\s*["']#([^"']+)["']/g;
+    while ((m = iRe.exec(gone + ruleBodies)) !== null) ids[m[1] || m[2]] = true;
+    Object.keys(ids).forEach(function (id) {
+      var e = _escRe(id);
+      if (new RegExp('url\\(\\s*["\']?#' + e + '["\']?\\s*\\)|href\\s*=\\s*["\']#' + e + '["\']').test(out)) return; // still used
+      var tag = new RegExp('<([a-zA-Z][\\w:-]*)\\b[^>]*\\bid\\s*=\\s*["\']' + e + '["\']').exec(out);
+      var el = tag ? _findElement(out, tag[1], id) : null;
+      var d0 = out.indexOf('<defs'), d1 = out.indexOf('</defs>');
+      if (el && d0 >= 0 && el.start > d0 && el.end <= d1) out = out.slice(0, el.start) + out.slice(el.end);
+    });
+    // every <defs> entry that carries a removed icon's private prefix
+    dead.forEach(function (t) {
+      for (var guard = 0; guard < 200; guard++) {
+        var d0 = out.indexOf('<defs'), d1 = out.indexOf('</defs>');
+        if (d0 < 0 || d1 < 0) break;
+        var hit = new RegExp('<([a-zA-Z][\\w:-]*)\\b[^>]*\\bid\\s*=\\s*["\'](' + _escRe(t) + '[^"\']*)["\']').exec(out.slice(d0, d1));
+        var el = hit ? _findElement(out, hit[1], hit[2]) : null;
+        if (!el || el.start < d0 || el.end > d1) break;
+        out = out.slice(0, el.start) + out.slice(el.end);
+      }
+    });
+    out = out.replace(/<defs>\s*<\/defs>\s*/g, ''); // nothing left in it
+    return { svg: out.replace(/\n[ \t]*\n[ \t]*\n+/g, '\n\n') };
+  };
+
+  /** Remove one icon from the repo sprite, commit, reload the Library. @returns {Promise<{ok:boolean, error?:string}>} */
+  SF.deleteIconFromRepo = function (symbolId, iconName) {
+    var run = function () {
+      var file = _spriteFiles()[0];
+      var result = { ok: false };
+      if (!file) { result.error = 'No icon repository sprite configured'; SF.showToast(result.error); return Promise.resolve(result); }
+      SF.showToast('Reading ' + file.name + ' from ' + (_cfg().repoName || 'repository') + '…');
+      return _getListing(true).then(function () { return _fetchText(file.name); }).then(function (res) {
+        var r = SF.removeIconFromSpriteText(res.text, symbolId);
+        if (r.error) { result.error = r.error; SF.showToast('Delete failed: ' + r.error); return result; }
+        return _commit(r.svg, [iconName], 'Remove', 'from').then(function (out) {
+          result.ok = true;
+          SF.showToast('Deleted ' + iconName + ' from the Library' + (out && out.pushed ? ' (commit ' + String(out.commit || '').slice(0, 8) + ')' : ''));
+          return SF.loadRepoLibraryIcons(true, true).then(function () { return result; });
+        });
+      }).catch(function (err) {
+        result.error = (err && err.message) || 'unknown error';
+        if (err && err.status === 401 && typeof SF.handleHostedUnauthorized === 'function') return SF.handleHostedUnauthorized('Session expired. Sign in with Zoho and try again.');
+        SF.showToast('Delete failed: ' + result.error);
+        return result;
+      });
+    };
+    // One change of the sprite at a time (same queue as adding icons): each reads the latest sprite.
+    var p = _queue.then(run, run);
+    _queue = p.catch(function () {});
+    return p;
+  };
 
   /** Same artwork (ignoring ids, classes and whitespace) as another repository icon? Returns that icon. */
   function _artKey(markup) {
