@@ -123,10 +123,23 @@
   }
 
   /** Standalone SVG for one parsed sprite icon, keeping only the shared styles/defs it needs. */
+  /** True when a class used by this icon has a rule that points into <defs> (clip-path: url(#…), fill: url(#…)). */
+  function _classesUseDefs(content, css) {
+    var used = {}, m, cRe = /\bclass\s*=\s*["']([^"']*)["']/g;
+    while ((m = cRe.exec(content)) !== null) m[1].split(/\s+/).forEach(function (k) { if (k) used[k] = true; });
+    var rRe = /([^{}]+)\{([^{}]*)\}/g, r;
+    while ((r = rRe.exec(css)) !== null) {
+      if (!/url\(\s*["']?#/.test(r[2])) continue;
+      var sRe = /\.(-?[_a-zA-Z][\w-]*)/g, c;
+      while ((c = sRe.exec(r[1])) !== null) if (used[c[1]]) return true;
+    }
+    return false;
+  }
+
   function _standaloneSvg(icon, spriteStyle, spriteDefs) {
     var content = icon.svgContent || '';
     var needsStyle = spriteStyle && /\bclass\s*=|var\(--/.test(content);
-    var needsDefs  = spriteDefs && /url\(\s*#|\b(xlink:)?href\s*=\s*["']#/.test(content);
+    var needsDefs  = spriteDefs && (/url\(\s*#|\b(xlink:)?href\s*=\s*["']#/.test(content) || (needsStyle && _classesUseDefs(content, spriteStyle)));
     var rootAttrs  = SF.buildPreviewAttrs(icon);
     return '<svg xmlns="' + SVG_NAMESPACE + '" xmlns:xlink="' + XLINK_NAMESPACE + '" viewBox="' +
       icon.originX + ' ' + icon.originY + ' ' + icon.width + ' ' + icon.height +
@@ -201,6 +214,13 @@
 
   /** Give a new icon's own classes / ids a unique prefix so they cannot clash with the sprite's. */
   function _isolate(icon, token) {
+    // Illustrator writes the icon's <style> INSIDE <defs>. Left there it is not seen as style: its classes (st0, st1…)
+    // keep their common names, repaint other icons of the sprite and are repainted by them. Move it to the style.
+    var inDefs = '';
+    icon.defsContent = String(icon.defsContent || '').replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, function (all, css) {
+      inDefs += '\n' + css.replace(/<!\[CDATA\[|\]\]>/g, ''); return '';
+    });
+    if (inDefs.trim()) icon.styleContent = (icon.styleContent || '') + inDefs;
     var style = SF.stripGlobalCss(icon.styleContent || ''), defs = icon.defsContent || '', content = icon.svgContent || '';
     var classMap = {}, idMap = {}, m;
     var selRe = /([^{}]+)\{/g;
@@ -345,6 +365,159 @@
     })).then(function (a) { return a.filter(Boolean); });
   }
 
+  // ── an icon SHEET: one plain SVG (no <symbol>) with several icons drawn next to each other ──────────────────
+  // Design tools export a row or column of artboards as one drawing. Each icon is found by where it is drawn:
+  // the top-level groups are measured in the browser and those that overlap or touch are one icon. It counts as
+  // a sheet only with clear evidence, so an ordinary icon made of two separate parts (pause, apps) stays one icon:
+  //   - every part has its own clip box (an exported artboard), or
+  //   - the canvas is a strip (long side ≥ 1.8 × short side) and the parts are clearly apart.
+  var GRAPHIC = { g: 1, path: 1, rect: 1, circle: 1, ellipse: 1, line: 1, polyline: 1, polygon: 1, text: 1, use: 1, image: 1 };
+  function _tagOf(el) { return String(el.localName || el.nodeName || '').toLowerCase(); }
+  function _fix(n) { return Math.round(n * 10000) / 10000; }
+
+  /** Box of an element in the root SVG's coordinates: its clip box when it has one (an artboard), else its drawing + stroke. */
+  function _unitBox(el, root) {
+    var m;
+    try { m = root.getScreenCTM().inverse().multiply(el.getScreenCTM()); } catch (e) { return null; }
+    var corners = function (x, y, w, h) {
+      var xs = [], ys = [];
+      [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].forEach(function (c) {
+        var p = root.createSVGPoint(); p.x = c[0]; p.y = c[1]; p = p.matrixTransform(m); xs.push(p.x); ys.push(p.y);
+      });
+      return { x: Math.min.apply(null, xs), y: Math.min.apply(null, ys), x2: Math.max.apply(null, xs), y2: Math.max.apply(null, ys) };
+    };
+    // clip-path may come from a class (Illustrator: .st6 { clip-path: url(#clippath) }), so ask the computed style.
+    var cs = window.getComputedStyle(el), ref = /url\(\s*["']?#([^"')\s]+)/.exec(cs.clipPath || el.getAttribute('clip-path') || '');
+    if (ref) {
+      var clip = null;
+      try { clip = root.querySelector('#' + (window.CSS && CSS.escape ? CSS.escape(ref[1]) : ref[1])); } catch (e) { clip = null; }
+      var r = clip && clip.children.length === 1 && _tagOf(clip.children[0]) === 'rect' ? clip.children[0] : null;
+      var w = r ? parseFloat(r.getAttribute('width')) : 0, h = r ? parseFloat(r.getAttribute('height')) : 0;
+      if (r && w > 0 && h > 0 && !r.getAttribute('transform')) {
+        var b = corners(parseFloat(r.getAttribute('x')) || 0, parseFloat(r.getAttribute('y')) || 0, w, h);
+        b.clip = true;
+        return b;
+      }
+    }
+    var box;
+    try { box = el.getBBox(); } catch (e) { return null; }
+    if (!box || (!box.width && !box.height)) return null;
+    var pad = 0, nodes = [el].concat(Array.prototype.slice.call(el.querySelectorAll('*'), 0, 400));
+    nodes.forEach(function (n) {
+      var s = window.getComputedStyle(n);
+      if (s.stroke && s.stroke !== 'none') pad = Math.max(pad, (parseFloat(s.strokeWidth) || 1) / 2);
+    });
+    return corners(box.x - pad, box.y - pad, box.width + 2 * pad, box.height + 2 * pad);
+  }
+
+  /**
+   * @returns {Array<{name, text}>|null} one standalone SVG per icon of the sheet (left to right, top to bottom),
+   *          or null when the file is one ordinary icon.
+   */
+  function _explodeSheet(fileName, svgText) {
+    var doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
+    var src = doc.documentElement;
+    if (!src || _tagOf(src) !== 'svg' || doc.getElementsByTagName('parsererror').length) return null;
+    // Measured in the page (hidden): boxes and class-based styles only exist for a rendered SVG.
+    var host = document.createElement('div');
+    host.style.cssText = 'position:absolute;left:-99999px;top:0;width:2000px;height:2000px;visibility:hidden;pointer-events:none';
+    var root = document.importNode(src, true);
+    host.appendChild(root);
+    document.body.appendChild(host);
+    try {
+      var graphics = function (el) { return Array.prototype.filter.call(el.children, function (c) { return GRAPHIC[_tagOf(c)]; }); };
+      // One group around everything is only a wrapper: look inside it (it is kept around every icon).
+      var wrappers = [], units = graphics(root);
+      while (units.length === 1 && _tagOf(units[0]) === 'g' && !/url\(/.test(window.getComputedStyle(units[0]).clipPath || '') && graphics(units[0]).length > 1) {
+        wrappers.push(units[0]); units = graphics(units[0]);
+      }
+      if (units.length < 2) return null;
+      var boxes = [];
+      units.forEach(function (el) { var b = _unitBox(el, root); if (b) { b.els = [el]; boxes.push(b); } });
+      if (boxes.length < 2) return null;
+
+      var vb = (root.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(parseFloat);
+      var cw = vb.length === 4 && vb[2] > 0 ? vb[2] : parseFloat(root.getAttribute('width')) || 0;
+      var ch = vb.length === 4 && vb[3] > 0 ? vb[3] : parseFloat(root.getAttribute('height')) || 0;
+      if (!cw || !ch) { cw = Math.max.apply(null, boxes.map(function (b) { return b.x2; })); ch = Math.max.apply(null, boxes.map(function (b) { return b.y2; })); }
+      var tol = Math.min(cw, ch) * 0.02;
+      var gap = function (a, b) { return Math.max(a.x - b.x2, b.x - a.x2, a.y - b.y2, b.y - a.y2); }; // ≤ 0: they overlap
+      // Parts that overlap or touch are one icon (repeat until nothing merges).
+      for (var merged = true; merged;) {
+        merged = false;
+        for (var i = 0; i < boxes.length && !merged; i++) {
+          for (var j = i + 1; j < boxes.length && !merged; j++) {
+            if (gap(boxes[i], boxes[j]) <= tol) {
+              var a = boxes[i], b = boxes[j];
+              boxes[i] = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), x2: Math.max(a.x2, b.x2), y2: Math.max(a.y2, b.y2), clip: a.clip && b.clip, els: a.els.concat(b.els) };
+              boxes.splice(j, 1); merged = true;
+            }
+          }
+        }
+      }
+      if (boxes.length < 2) return null;
+      var sizes = boxes.map(function (b) { return Math.max(b.x2 - b.x, b.y2 - b.y); }).sort(function (p, q) { return p - q; });
+      var median = sizes[Math.floor(sizes.length / 2)], minGap = Infinity;
+      boxes.forEach(function (p, pi) { boxes.forEach(function (q, qi) { if (pi < qi) minGap = Math.min(minGap, gap(p, q)); }); });
+      var artboards = boxes.every(function (b) { return b.clip; });
+      var strip = Math.max(cw, ch) >= 1.8 * Math.min(cw, ch) && minGap >= 0.15 * median;
+      if (!artboards && !strip) return null; // an ordinary icon with separate parts
+
+      // Reading order: rows top to bottom, then left to right.
+      boxes.sort(function (p, q) { return Math.abs(p.y - q.y) > median / 2 ? p.y - q.y : p.x - q.x; });
+      var order = Array.prototype.slice.call(root.querySelectorAll('*'));
+      var base = String(fileName || 'icon').replace(/\.svg$/i, '');
+      var keepAttr = function (n) { return !/^(width|height|viewBox|id|x|y|version|style)$/.test(n) && n.indexOf('xmlns') !== 0; };
+      return boxes.map(function (b, n) {
+        var out = document.createElementNS(SVG_NAMESPACE, 'svg');
+        Array.prototype.forEach.call(root.attributes, function (at) { if (keepAttr(at.name)) out.setAttribute(at.name, at.value); }); // fill, stroke… set on the sheet
+        var w = _fix(b.x2 - b.x), h = _fix(b.y2 - b.y);
+        out.setAttribute('viewBox', _fix(b.x) + ' ' + _fix(b.y) + ' ' + w + ' ' + h);
+        out.setAttribute('width', w); out.setAttribute('height', h);
+        // The sheet's shared parts (styles, clip boxes, gradients) go with every icon.
+        Array.prototype.forEach.call(root.children, function (c) { if (!GRAPHIC[_tagOf(c)]) out.appendChild(c.cloneNode(true)); });
+        var parent = out;
+        wrappers.forEach(function (wr) { var shell = wr.cloneNode(false); parent.appendChild(shell); parent = shell; });
+        b.els.sort(function (p, q) { return order.indexOf(p) - order.indexOf(q); }).forEach(function (el) { parent.appendChild(el.cloneNode(true)); });
+        return { name: base + '-' + (n + 1) + '.svg', text: new XMLSerializer().serializeToString(out) };
+      });
+    } catch (e) {
+      return null; // could not be measured: keep the file as one icon
+    } finally {
+      document.body.removeChild(host);
+    }
+  }
+
+  /**
+   * Uploaded files → one item per ICON. A sprite file (it has <symbol>s) is separated into its icons, each as its own
+   * standalone SVG named after its symbol; an icon sheet (several icons drawn next to each other in one plain SVG) is
+   * separated by where the icons are drawn; any other SVG stays one icon.
+   * @param {object} [keepWhole] file names to keep as one icon although they look like a sheet
+   * @returns {{items: Array<{name, text, from?}>, notes: string[], sheets: Array<{name, text, count}>}} name is a
+   *          file-style name ("bell.svg"); from is the file an icon was separated from; notes says what was done with
+   *          each separated file; sheets lists the files separated as a sheet (the guess a person may undo).
+   */
+  function _separate(files, keepWhole) {
+    var items = [], notes = [], sheets = [];
+    (files || []).forEach(function (f) {
+      if (!/<symbol\b/i.test(f.text)) {
+        var parts = keepWhole && keepWhole[f.name] ? null : _explodeSheet(f.name, f.text);
+        if (!parts) { items.push({ name: f.name, text: f.text }); return; }
+        parts.forEach(function (ic) { items.push({ name: ic.name, text: ic.text, from: f.name }); });
+        notes.push(f.name + ': ' + parts.length + ' icons drawn side by side, separated');
+        sheets.push({ name: f.name, text: f.text, count: parts.length });
+        return;
+      }
+      var icons = [];
+      try { icons = _explodeSprite(f.name, f.text); } catch (e) { icons = []; }
+      icons = icons.filter(function (ic) { return ic && ic.svgContent && (ic.name || ic.symbolId); });
+      if (!icons.length) { notes.push(f.name + ': no icons found in this sprite'); return; }
+      icons.forEach(function (ic) { items.push({ name: String(ic.name || ic.symbolId) + '.svg', text: ic.svgContent, from: f.name }); });
+      notes.push(f.name + ': sprite separated into ' + icons.length + ' icon' + (icons.length === 1 ? '' : 's'));
+    });
+    return { items: items, notes: notes, sheets: sheets };
+  }
+
   /** Commit a new sprite text to the icon repo. */
   function _commit(svg, names) {
     var file = _spriteFiles()[0];
@@ -370,9 +543,11 @@
   SF.addIconsToIconRepo = function (fileList) {
     var file = _spriteFiles()[0];
     if (!file) { SF.showToast('No icon repository sprite configured'); return Promise.resolve(); }
-    return _readFiles(fileList).then(function (items) {
-      if (!items.length) { SF.showToast('Choose one or more .svg files'); return; }
-      return _appendItems(items);
+    return _readFiles(fileList).then(function (files) {
+      var sep = _separate(files); // a sprite file adds each of its icons separately
+      if (!sep.items.length) { SF.showToast(sep.notes[0] || 'Choose one or more .svg files'); return; }
+      if (sep.notes.length) SF.showToast(sep.notes.join(' · '));
+      return _appendItems(sep.items);
     });
   };
 
@@ -626,7 +801,8 @@
 
   // ── Library "Upload Icons" window: drop SVGs, name them, Submit ──────────
 
-  var _up = [];  // [{ file, text, name }]
+  var _up = [];  // [{ file, text, name, from? }]
+  var _upSheets = []; // [{ name, text, count }] files separated as an icon sheet: "Keep as one icon" undoes it
 
   function _escHtml(t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
@@ -647,10 +823,18 @@
       return '<div class="lib-upload-row' + (dup ? ' is-dup' : '') + '" data-i="' + i + '">' +
         '<div class="lib-upload-prev">' + prev + '</div>' +
         '<input type="text" class="form-input lib-upload-name" value="' + _escHtml(u.name) + '" placeholder="Icon name" autocomplete="off" spellcheck="false">' +
+        (u.from ? '<span class="lib-upload-from" title="Separated from the sprite ' + _escHtml(u.from) + '">from ' + _escHtml(u.from) + '</span>' : '') +
         (dup ? '<span class="lib-upload-note">already in Library</span>' : '') +
         '<button type="button" class="lib-upload-remove" title="Remove">&times;</button></div>';
     }).join(''));
     $('#libUploadSubmit').prop('disabled', !ok);
+    // Files separated by where the icons are drawn: say so, and let the person keep such a file as one icon.
+    _upSheets = _upSheets.filter(function (sh) { return _up.some(function (u) { return u.from === sh.name; }); });
+    if (!$('#libUploadSheets').length) $('#libUploadList').before('<div class="lib-upload-sheets" id="libUploadSheets"></div>');
+    $('#libUploadSheets').html(_upSheets.map(function (sh, i) {
+      return '<div class="lib-upload-sheet"><span><b>' + _escHtml(sh.name) + '</b> has ' + sh.count + ' icons drawn side by side: each one is saved as its own icon.</span>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-lib-whole="' + i + '">Keep as one icon</button></div>';
+    }).join(''));
   }
 
   function _upAdd(fileList) {
@@ -658,20 +842,31 @@
     var svgs = files.filter(function (f) { return /\.svg$/i.test(f.name); });
     if (files.length && svgs.length < files.length) $('#libUploadStatus').text('Only .svg files were added.').attr('class', 'upload-status error');
     else $('#libUploadStatus').text('').attr('class', 'upload-status');
-    _readFiles(svgs).then(function (items) {
-      items.forEach(function (it) {
+    _readFiles(svgs).then(function (read) {
+      var sep = _separate(read); // a sprite file becomes one row per icon
+      sep.items.forEach(function (it) {
         if (_up.some(function (u) { return u.file === it.name && u.text === it.text; })) return;
-        _up.push({ file: it.name, text: it.text, name: SF.cleanFileName(it.name) });
+        _up.push({ file: it.name, text: it.text, name: SF.cleanFileName(it.name), from: it.from || '' });
       });
+      if (sep.notes.length) $('#libUploadStatus').text(sep.notes.join(' · ')).attr('class', 'upload-status' + (sep.items.length ? '' : ' error'));
+      sep.sheets.forEach(function (sh) { if (!_upSheets.some(function (x) { return x.name === sh.name; })) _upSheets.push(sh); });
       _upRender();
     });
   }
 
-  function _upClose() { $('#libUploadModal').addClass('hidden'); _up = []; $('#libUploadList').empty(); }
+  function _upClose() { $('#libUploadModal').addClass('hidden'); _up = []; _upSheets = []; $('#libUploadList, #libUploadSheets').empty(); }
+  $(document).on('click', '[data-lib-whole]', function () {
+    var sh = _upSheets[+$(this).data('lib-whole')];
+    if (!sh) return;
+    _up = _up.filter(function (u) { return u.from !== sh.name; });
+    _up.push({ file: sh.name, text: sh.text, name: SF.cleanFileName(sh.name), from: '' });
+    $('#libUploadStatus').text(sh.name + ': kept as one icon').attr('class', 'upload-status');
+    _upRender();
+  });
 
   $(document).on('click', '#libUploadIconsBtn', function (e) {
     e.preventDefault();
-    _up = []; _upRender();
+    _up = []; _upSheets = []; _upRender();
     $('#libUploadStatus').text('').attr('class', 'upload-status');
     $('#libUploadModal').removeClass('hidden');
   });

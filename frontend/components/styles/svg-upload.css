@@ -707,3 +707,8 @@
 .lib-upload-row input { flex: 1; min-width: 0; }
 .lib-upload-note { font-size: 11px; color: var(--danger); white-space: nowrap; }
 .lib-upload-remove { border: 0; background: none; font-size: 18px; line-height: 1; cursor: pointer; color: var(--text-muted, #888); }
+
+/* Upload Icons window: an icon that was separated from an uploaded sprite file. */
+.lib-upload-from { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.lib-upload-sheet { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 8px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 6px; font-size: 12px; color: var(--text-secondary); }
+.lib-upload-sheet .btn { white-space: nowrap; }
