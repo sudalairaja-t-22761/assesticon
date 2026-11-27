@@ -248,6 +248,11 @@
 .vf-sub { margin-top: 2px; font-size: 12px; color: var(--text-tertiary); }
 .vf-row-mine { background: color-mix(in srgb, var(--accent) 5%, transparent); }
 .vf-row-open { box-shadow: inset 3px 0 0 var(--accent); }
+/* The detail of the open request: its own row directly under the clicked row. */
+.vf-table tr.vf-row-open { background: var(--bg-hover); }
+.vf-table tbody tr.vf-detail-row, .vf-table tbody tr.vf-detail-row:hover { cursor: default; background: transparent; }
+.vf-table tr.vf-detail-row > td { padding: 0; box-shadow: inset 3px 0 0 var(--accent); border-bottom: 1px solid var(--border-light); }
+.vf-detail-row .vf-detail { border-top: 0; }
 #wfRequestDetail:not(:empty) { margin: 0 16px 16px; border: 1px solid var(--border-light); border-radius: 12px; }
 
 /* ── Review dialog (its own classes: the Members dialog uses .vf-modal*) ── */
@@ -271,3 +276,20 @@
 .vf-btn-approve { background: #12AA67 !important; border-color: #12AA67 !important; }
 @media (max-width: 560px) { .vf-rvm-body { grid-template-columns: 1fr; } }
 .vf-table-simple .vf-pill { white-space: nowrap; }
+
+/* Ready to push: tick several icons, push them in one commit and one npm version. */
+.vf-batch { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--border-light); background: var(--bg-hover); }
+.vf-batch-count { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.vf-batch .btn:disabled { opacity: .45; cursor: not-allowed; filter: grayscale(.6); box-shadow: none; }
+.vf-check { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: -6px; cursor: pointer; }
+.vf-check input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
+.vf-check input:disabled { cursor: not-allowed; opacity: .4; }
+.vf-table-simple th:has(.vf-check), .vf-table-simple td:has(.vf-check) { width: 44px; padding-right: 0; }
+
+/* Pushed list: order + filters. */
+.vf-filterbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--border-light); background: var(--bg-hover); }
+.vf-filter { height: 30px; padding: 0 8px; font: inherit; font-size: 12px; color: var(--text-primary); background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px; max-width: 220px; }
+.vf-filter-search { min-width: 200px; flex: 1 1 200px; max-width: 320px; padding: 0 10px; }
+/* The request that just moved to this tab (approved or pushed). */
+@keyframes vf-row-flash { 0%, 60% { background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { background: transparent; } }
+.vf-table tr.vf-row-flash { animation: vf-row-flash 2.6s ease-out; }

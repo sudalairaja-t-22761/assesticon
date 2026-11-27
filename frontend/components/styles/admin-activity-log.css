@@ -21,3 +21,35 @@
 .al-empty { padding: 32px 12px; text-align: center; color: var(--text-tertiary); font-size: 13px; }
 .al-error { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--danger-bg); color: var(--danger); font-size: 13px; }
 .al-more { margin-top: 8px; }
+
+/* ── dashboard: totals, publishes, one filtered feed ── */
+button.al-stat { text-align: left; font-family: inherit; cursor: pointer; transition: border-color .15s, background .15s; }
+button.al-stat:hover:not(:disabled) { border-color: var(--accent, #4f5bd5); background: var(--bg-hover); }
+button.al-stat:disabled { cursor: default; }
+.al-stat-bad span { color: var(--danger); }
+.al-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.al-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 420px; }
+.al-chip { height: 28px; padding: 0 10px; border: 1px solid var(--border-light); border-radius: 999px; background: var(--bg-panel); color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.al-chip span { margin-left: 2px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.al-chip:hover { background: var(--bg-hover); }
+.al-chip.active { border-color: var(--accent, #4f5bd5); color: var(--text-primary); font-weight: 600; background: color-mix(in srgb, var(--accent, #4f5bd5) 10%, transparent); }
+.al-search { height: 30px; min-width: 220px; padding: 0 10px; font-size: 12px; color: var(--text-primary); background: var(--bg-input); border: 1px solid var(--border-light); border-radius: var(--radius-sm); }
+.al-when { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.al-version { font-weight: 600; font-variant-numeric: tabular-nums; }
+.al-tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--bg-hover); color: var(--text-secondary); }
+.al-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.al-what { font-weight: 500; }
+.al-what-bad, .al-num-bad { color: var(--danger); font-weight: 600; }
+.al-details { max-width: 460px; font-size: 12px; color: var(--text-secondary); word-break: break-word; }
+.al-err-text { max-width: 260px; margin-top: 2px; font-size: 11px; color: var(--danger); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.al-row-bad td { background: color-mix(in srgb, var(--danger) 5%, transparent); }
+.al-user-row { cursor: pointer; }
+.al-pill-ok { background: color-mix(in srgb, #12AA67 15%, transparent); color: #0d8a53; }
+.al-pill-bad { background: var(--danger-bg); color: var(--danger); }
+.al-cat-publish { background: color-mix(in srgb, #7c3aed 14%, transparent); color: #6d28d9; }
+.al-cat-npm { background: color-mix(in srgb, #0ea5e9 15%, transparent); color: #0369a1; }
+.al-cat-setup { background: color-mix(in srgb, #f59e0b 18%, transparent); color: #b45309; }
+.al-cat-push { background: color-mix(in srgb, #2563eb 14%, transparent); color: #1d4ed8; }
+.al-cat-review { background: color-mix(in srgb, #12AA67 15%, transparent); color: #0d8a53; }
+.al-cat-request, .al-cat-notify, .al-cat-signin { background: color-mix(in srgb, #616E88 15%, transparent); color: var(--text-secondary); }
+.al-feed .al-pill { white-space: nowrap; }

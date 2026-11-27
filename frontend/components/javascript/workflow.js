@@ -581,10 +581,40 @@
   function stageTag(r) { var st = stageOf(r); return '<span class="vf-pill-tag vf-stage-' + st + '">' + (st === 'master' ? 'Master' : 'Mock') + '</span>'; }
   function dataUri(svg) { return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg || ''); }
 
+  // The request detail opens directly under the row that was clicked (its own table row), not under the whole list.
+  // It is ONE element that moves: back to its home under the list before the list is redrawn, then under the open
+  // request's row again. A request whose row is not in the tab on screen keeps the home place.
+  function detailHome() {
+    var $d = $('#wfRequestDetail');
+    if ($d.closest('#wfRequestsList').length) $d.appendTo($('#wfRequestsList').parent());
+    $('#wfRequestsList .vf-detail-row').remove();
+  }
+  function placeDetail() {
+    detailHome();
+    var $rows = $('#wfRequestsList tr.vf-row').removeClass('vf-row-open');
+    if (!wf.openId) return;
+    var $row = $rows.filter(function () { return String($(this).data('vf-req')) === String(wf.openId); }).first();
+    if (!$row.length) return;
+    $row.addClass('vf-row-open');
+    $('<tr class="vf-detail-row"><td colspan="' + $row.children('td').length + '"></td></tr>').insertAfter($row).children('td').append($('#wfRequestDetail'));
+  }
+  function closeRequest() { wf.openId = null; clearTimeout(wf.relTimer); $('#wfRequestDetail').empty(); placeDetail(); }
+
   function loadRequests() {
+    detailHome();
     $('#wfRequestsList').html('<div class="vf-empty">Loading…</div>');
     return api('GET', 'requests').then(function (r) {
       wf.requests = r.requests || [];
+      // After an approval or a push the request is in the next step: open that step's tab and mark the row(s).
+      if (wf.follow) {
+        var ids = wf.follow.map(String); wf.follow = null;
+        var hit = wf.requests.filter(function (x) { return ids.indexOf(String(x.ROWID)) >= 0; })[0];
+        var next = hit && GROUPS.filter(function (g) { return g.test(hit); })[0];
+        if (next) {
+          wf.reqTab = next.key; wf.flash = ids;
+          if (next.key === 'done') wf.doneFilter = $.extend({}, DONE_DEFAULT); // latest first, nothing hidden: the row is at the top
+        }
+      }
       if (r.role) wf.role = r.role;
       if (typeof SF.refreshMasterLibraryRole === 'function') SF.refreshMasterLibraryRole();
       $('#wfMailTest, #wfCliqTest').toggleClass('hidden', wf.role !== 'admin');
@@ -693,30 +723,106 @@
   }
   function branchCell(r) { return stageTag(r) + '<div class="vf-sub">' + targetText(r) + '</div>'; }
 
+  // ── Pushed list: order + filters (kept while the page is open) ──────────────────────────────────────────────
+  var DONE_DEFAULT = { sort: 'new', branch: '', rel: '', version: '', by: '', q: '' };
+  function doneFilter() { return (wf.doneFilter = wf.doneFilter || $.extend({}, DONE_DEFAULT)); }
+  function doneFiltered() { var f = doneFilter(); return !!(f.branch || f.rel || f.version || f.by || f.q); }
+  function pushedTime(r) { var t = new Date(r.pushedAt || r.CREATEDTIME || 0).getTime(); return isNaN(t) ? 0 : t; }
+  // 0.0.6-mock-10 is newer than 0.0.6-mock-9: compare the numbers, not the text.
+  function cmpVersion(a, b) {
+    var x = String(a || '').split(/[.\-+]/), y = String(b || '').split(/[.\-+]/);
+    for (var i = 0; i < Math.max(x.length, y.length); i++) {
+      var p = x[i] === undefined ? '' : x[i], q = y[i] === undefined ? '' : y[i], n = /^\d+$/.test(p) && /^\d+$/.test(q);
+      if (p === q) continue;
+      return n ? Number(p) - Number(q) : (p < q ? -1 : 1);
+    }
+    return 0;
+  }
+  function relOf(r) { return r.releaseStatus === 'published' ? 'published' : r.releaseStatus === 'failed' ? 'failed' : 'none'; }
+  function doneView(rows) {
+    var f = doneFilter(), q = f.q.trim().toLowerCase();
+    var out = rows.filter(function (r) {
+      if (f.branch && stageOf(r) !== f.branch) return false;
+      if (f.rel && relOf(r) !== f.rel) return false;
+      if (f.version && String(r.releaseVersion || '') !== f.version) return false;
+      if (f.by && String(r.pushedBy || '') !== f.by) return false;
+      if (q && [r.iconName, r.symbolId, r.releaseVersion, r.requestedByName, r.requestedBy, r.pushedBy].join(' ').toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+    out.sort(function (a, b) {
+      if (f.sort === 'old') return pushedTime(a) - pushedTime(b);
+      if (f.sort === 'name') return String(a.iconName || '').localeCompare(String(b.iconName || ''));
+      if (f.sort === 'version') return cmpVersion(b.releaseVersion, a.releaseVersion) || pushedTime(b) - pushedTime(a); // unpublished last
+      return pushedTime(b) - pushedTime(a);
+    });
+    return out;
+  }
+  function pushedWhen(r) {
+    var t = pushedTime(r);
+    if (!t) return '<span class="vf-msg">—</span>';
+    var d = new Date(t);
+    return '<span title="' + esc(d.toLocaleString()) + '">' + esc(d.toLocaleDateString(undefined, { day: '2-digit', month: 'short' })) +
+      '<div class="vf-sub">' + esc(d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })) + '</div></span>';
+  }
+  function doneBarHtml(all, shown) {
+    var f = doneFilter();
+    var uniq = function (list) { return list.filter(function (x, i) { return x && list.indexOf(x) === i; }); };
+    var versions = uniq(all.map(function (r) { return String(r.releaseVersion || ''); })).sort(function (a, b) { return cmpVersion(b, a); });
+    var pushers = uniq(all.map(function (r) { return String(r.pushedBy || ''); })).sort();
+    var sel = function (key, label, opts) {
+      return '<select class="vf-filter" data-vf-done="' + key + '" aria-label="' + esc(label) + '">' + opts.map(function (o) {
+        return '<option value="' + esc(o[0]) + '"' + (f[key] === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+      }).join('') + '</select>';
+    };
+    return '<div class="vf-filterbar" id="wfDoneBar">' +
+      sel('sort', 'Order', [['new', 'Latest first'], ['old', 'Oldest first'], ['version', 'Version, newest first'], ['name', 'Icon name A–Z']]) +
+      sel('branch', 'Branch', [['', 'All branches'], ['mock', 'Mock branch'], ['master', 'Master branch']]) +
+      sel('rel', 'npm state', [['', 'Any npm state'], ['published', 'Published'], ['none', 'Not published yet'], ['failed', 'Publish failed']]) +
+      sel('version', 'Version', [['', 'All versions']].concat(versions.map(function (v) { return [v, 'v' + v]; }))) +
+      sel('by', 'Pushed by', [['', 'Pushed by anyone']].concat(pushers.map(function (p) { return [p, p]; }))) +
+      '<input class="vf-filter vf-filter-search" type="search" data-vf-done="q" value="' + esc(f.q) + '" placeholder="Search icon, version, user…" aria-label="Search pushed icons">' +
+      '<span class="vf-msg">' + shown + (shown !== all.length ? ' of ' + all.length : '') + ' icon' + (all.length === 1 ? '' : 's') + '</span>' +
+      (doneFiltered() ? '<button class="btn btn-ghost btn-sm vf-pill" id="wfDoneClear" type="button">Clear filters</button>' : '') +
+      '</div>';
+  }
+  $(document).on('change', 'select[data-vf-done]', function () { doneFilter()[$(this).data('vf-done')] = $(this).val() || ''; renderRequestsList(); });
+  $(document).on('input', 'input[data-vf-done]', function () {
+    doneFilter().q = $(this).val() || '';
+    renderRequestsList();
+    var el = $('#wfDoneBar input[data-vf-done]')[0]; // the list was redrawn: keep typing in the search box
+    if (el) { el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (_) { /* search inputs in some browsers */ } }
+  });
+  $(document).on('click', '#wfDoneClear', function () { var s = doneFilter().sort; wf.doneFilter = $.extend({}, DONE_DEFAULT, { sort: s }); renderRequestsList(); });
+
   function groupTable(g, rows) {
-    var cols;
+    var cols, all = rows;
+    if (g.key === 'done') rows = doneView(all);
     if (g.key === 'visual') cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell], ['Approver', function (r) { return waitingFor(r) + mailTag(r); }], ['', actionCell]];
     else if (g.key === 'ui') cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell],
       ['Visual audit', function (r) { return decidedBy(r.designerDecision, r.designerBy, 'designer'); }], ['Approver', function (r) { return waitingFor(r) + mailTag(r); }], ['', actionCell]];
-    else if (g.key === 'ready') cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell], ['', actionCell]];
-    else if (g.key === 'done') cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell], ['Pushed by', function (r) { return esc(r.pushedBy || '—'); }], ['Version', statusPill]];
+    else if (g.key === 'ready') cols = [['<label class="vf-check" title="Select all icons of one branch"><input type="checkbox" id="wfBatchAll" aria-label="Select all"></label>', batchCheckCell],
+      ['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell], ['', actionCell]];
+    else if (g.key === 'done') cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell], ['Pushed by', function (r) { return esc(r.pushedBy || '—'); }], ['Pushed', pushedWhen], ['Version', statusPill]];
     else cols = [['Icon', iconOnly], ['Branch', branchCell], ['Requested by', whoCell], ['Rejected by', function (r) {
       return r.designerDecision === 'rejected' ? decidedBy('rejected', r.designerBy, 'designer') : r.uiDecision === 'rejected' ? decidedBy('rejected', r.uiBy, 'ui') : '<span class="vf-msg">declined by an admin</span>';
     }]];
     return '<div class="vf-card">' +
       '<div class="vf-card-head"><h4>' + esc(g.title) + '</h4><span class="vf-msg">' + esc(g.hint) + '</span></div>' +
+      (g.key === 'ready' && rows.length ? batchBarHtml() : '') +
+      (g.key === 'done' && all.length ? doneBarHtml(all, rows.length) : '') +
       (rows.length
         ? '<table class="vf-table vf-table-simple"><thead><tr>' + cols.map(function (c) { return '<th>' + c[0] + '</th>'; }).join('') + '</tr></thead><tbody>' +
           rows.map(function (r) {
-            return '<tr class="vf-row' + (r.canReview || r.canPush ? ' vf-row-mine' : '') + (String(r.ROWID) === String(wf.openId) ? ' vf-row-open' : '') + '" data-vf-req="' + esc(r.ROWID) + '" title="Open the request">' +
+            return '<tr class="vf-row' + (r.canReview || r.canPush ? ' vf-row-mine' : '') + (String(r.ROWID) === String(wf.openId) ? ' vf-row-open' : '') + '" data-vf-req="' + esc(r.ROWID) + '" title="Show or hide the details of this request">' +
               cols.map(function (c, i) { return '<td' + (i === cols.length - 1 && !c[0] ? ' class="vf-cell-action"' : '') + '>' + c[1](r) + '</td>'; }).join('') + '</tr>';
           }).join('') + '</tbody></table>'
-        : '<div class="vf-empty">Nothing in ' + esc(g.title) + ' right now.</div>') +
+        : '<div class="vf-empty">' + (all.length ? 'No pushed icon matches these filters.' : 'Nothing in ' + esc(g.title) + ' right now.') + '</div>') +
       '</div>';
   }
   function iconOnly(r) { return '<b class="vf-icon-name">' + esc(r.iconName) + '</b>'; }
 
   function renderRequestsList() {
+    detailHome(); // the list below is redrawn: keep the detail element
     if (!wf.requests.length) { $('#wfRequestsList').html('<div class="vf-card"><div class="vf-empty">No requests yet. Request an icon from the Library or the Request Icon page.</div></div>'); return; }
     var groups = GROUPS.map(function (g) {
       var rows = wf.requests.filter(g.test);
@@ -735,6 +841,14 @@
           esc(x.g.title) + ' <span class="vf-tab-count">' + x.rows.length + '</span>' + (x.mine ? '<span class="vf-tab-dot" title="' + x.mine + ' waiting for you"></span>' : '') + '</button>';
       }).join('') + '</div>' +
       groupTable(cur.g, cur.rows));
+    placeDetail();
+    if ($('#wfBatchBar').length) { updateBatchBar(); checkNpmLogin(); } // the bar's Push button needs the npm login state
+    if (wf.flash) { // the request(s) that just moved here
+      var flash = wf.flash; wf.flash = null;
+      var $hit = $('#wfRequestsList tr.vf-row').filter(function () { return flash.indexOf(String($(this).data('vf-req'))) >= 0; }).addClass('vf-row-flash');
+      if ($hit.length) { try { $hit[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) { /* old browser */ } }
+      setTimeout(function () { $hit.removeClass('vf-row-flash'); }, 2600);
+    }
   }
   $(document).on('click', '[data-vf-tab]', function () { wf.reqTab = $(this).data('vf-tab'); renderRequestsList(); });
 
@@ -808,11 +922,16 @@
         : u.sent ? ' — mailed ' + u.sent + ' UI audit approver' + (u.sent === 1 ? '' : 's') + ' for the next audit'
         : ' — no UI audit approvers yet to mail') : ''));
       if (String(wf.openId) === String(rv.id)) wf.openId = rv.id;
+      if (decision !== 'reject') wf.follow = [rv.id]; // approved: go to the tab of its next step
       return Promise.all([loadRequests(), loadStatuses()]);
     }).catch(function (e) { $('#wfRvError').removeClass('hidden').text(e.message); }).then(function () { $b.prop('disabled', false); });
   });
 
-  $(document).on('click', '.vf-row', function () { openRequest(String($(this).data('vf-req'))); });
+  // A row opens its request under itself; the open row closes it again.
+  $(document).on('click', '.vf-row', function () {
+    var id = String($(this).data('vf-req'));
+    if (String(wf.openId) === id && $(this).next('.vf-detail-row').length) closeRequest(); else openRequest(id);
+  });
 
   function stepsHtml(r) {
     var rej = function (d) { return d === 'rejected'; };
@@ -835,7 +954,9 @@
   }
 
   function openRequest(id) {
+    if (String(wf.openId) !== String(id)) $('#wfRequestDetail').html('<div class="vf-detail"><span class="vf-msg">Loading…</span></div>');
     wf.openId = id;
+    placeDetail();
     api('GET', 'requests/' + encodeURIComponent(id)).then(function (res) {
       var r = res.request;
       var actions = '';
@@ -859,8 +980,8 @@
       }
       var target = esc(TARGETS[r.targetSprite] || r.targetSprite);
       // The push also publishes to npm from this admin's machine, so Push stays disabled until this machine is logged in to npm.
-      var npmGate = '<button class="btn btn-ghost btn-sm vf-pill" id="wfNpmLoginBtn" type="button" title="Log in to the npm registry on this machine. The push publishes the new package version under this npm user.">npm login</button>' +
-        '<span class="vf-msg" id="wfNpmState">Checking the npm login of this machine…</span>';
+      var npmGate = '<button class="btn btn-ghost btn-sm vf-pill wf-npm-login-btn" id="wfNpmLoginBtn" type="button" title="Log in to the npm registry on this machine. The push publishes the new package version under this npm user.">npm login</button>' +
+        '<span class="vf-msg wf-npm-state" id="wfNpmState">Checking the npm login of this machine…</span>';
       var pushOff = ' disabled title="Log in to npm first"', needNpm = !!res.canPush;
       if (res.canPush === 'mock') {
         actions += '<button class="btn btn-primary btn-sm" id="wfPushBtn" type="button"' + pushOff + '>Push to mock · ' + target + '</button>' + npmGate;
@@ -929,10 +1050,11 @@
     var title = state === 'in' ? 'Publishes the npm version as ' + user + ' (this login is used once)'
       : state === 'out' ? 'Log in to npm first' : 'Set up npm login on this machine first';
     $('#wfPushBtn, #wfRepublishBtn').prop('disabled', state !== 'in').attr('title', title);
-    $('#wfNpmLoginBtn').text(state === 'in' ? 'Change npm login' : 'npm login');
-    $('#wfNpmState').text(state === 'in' ? 'npm login OK as ' + user + ' — valid for one push in the next ' + Math.max(1, Math.round((l.exp - Date.now()) / 60000)) + ' min. Nothing is stored.'
+    $('.wf-npm-login-btn').text(state === 'in' ? 'Change npm login' : 'npm login');
+    $('.wf-npm-state').text(state === 'in' ? 'npm login OK as ' + user + ' — valid for one push in the next ' + Math.max(1, Math.round((l.exp - Date.now()) / 60000)) + ' min. Nothing is stored.'
       : state === 'out' ? 'Log in with your npm username and password to enable this button. The login is asked for every push and is not stored.'
       : 'npm login is not set up on this machine. Click "npm login", run the one-time setup, then log in to enable this button.');
+      updateBatchBar();
   }
   function checkNpmLogin() {
     return npmHelper('GET', '/status').then(function (st) {
@@ -1010,11 +1132,11 @@
       if (wf.npm.state === 'off' && wf.npmOldHelper) { $('#wfNpmSetupError').text('The helper on this machine is still the older version. Run the command above in Terminal, wait for "Done", then check again.').removeClass('hidden'); return; }
       if (wf.npm.state === 'off') { showNpmSetupReport(); return; }
       $('#wfNpmSetup').addClass('hidden');
-      if (wf.npm.state === 'out') $('#wfNpmLoginBtn').trigger('click'); // helper is there: now the username + password
+      if (wf.npm.state === 'out') $('.wf-npm-login-btn').first().trigger('click'); // helper is there: now the username + password
     });
   });
 
-  $(document).on('click', '#wfNpmLoginBtn', function () {
+  $(document).on('click', '.wf-npm-login-btn', function () {
     if (wf.npm && wf.npm.state === 'off') { openNpmSetup(); return; } // no helper here yet: the one-time setup command
     if (!$('#wfNpmModal').length) $('body').append(npmLoginModalHtml());
     $('#wfNpmUser').val(''); $('#wfNpmPass').val(''); $('#wfNpmError').addClass('hidden');
@@ -1027,8 +1149,11 @@
     var user = $('#wfNpmUser').val().trim(), pass = $('#wfNpmPass').val();
     if (!user || !pass) { $('#wfNpmError').text('Enter your npm username and password').removeClass('hidden'); return; }
     var $b = $(this).prop('disabled', true).text('Checking…');
+    // For the admin Activity Log: who logged in to npm as which user, and failed attempts. Never the password.
+    var trackLogin = function (ok, o, error) { api('POST', 'activity/track', { type: 'npm_login', ok: ok, npmUser: (o && o.user) || user, machine: (o && o.machine) || '', error: error || '' }).catch(function () {}); };
     npmHelper('POST', '/login', { username: user, password: pass }).then(function (out) {
-      if (!out || !out.ok) throw new Error((out && out.error) || 'npm login failed');
+      if (!out || !out.ok) { if (out) trackLogin(false, out, out.error); throw new Error((out && out.error) || 'npm login failed'); }
+      trackLogin(true, out);
       $('#wfNpmModal').addClass('hidden');
       if (!out.ticket) throw new Error('the npm helper on this machine is an older version — click "npm login" and run the setup command again');
       wf.npmLogin = { user: out.user, ticket: out.ticket, exp: Date.now() + (out.minutes || 10) * 60000 - 15000 };
@@ -1065,7 +1190,7 @@
     } else if (!window.confirm('Delete the request' + (r ? ' for "' + r.iconName + '"' : '') + '? Its history is removed too.')) return;
     api('DELETE', 'requests/' + encodeURIComponent(id) + (note ? '?note=' + encodeURIComponent(note) : '')).then(function () {
       SF.showToast('Request deleted');
-      if (wf.openId === id) { wf.openId = null; $('#wfRequestDetail').empty(); }
+      if (wf.openId === id) closeRequest();
       return Promise.all([loadRequests(), loadStatuses()]);
     }).catch(fail);
   });
@@ -1113,6 +1238,157 @@
           : 'Assigned — approval mail sent to ' + mail.map(function (m) { return m.to; }).join(', '));
         return loadRequests();
       }).catch(fail);
+  });
+
+  // ── Ready to push: tick several requests, push them in ONE commit and publish ONE npm version ───────────────
+  // All ticked requests go to the same branch (a commit and a version belong to one branch), so the first tick locks
+  // the list to that branch. The npm login is asked as for a single push: one login, one push, one publish.
+  function batchable() { return (wf.requests || []).filter(function (r) { return r.status === 'approved' && r.canPush; }); }
+  function batchRows() {
+    wf.batch = wf.batch || {};
+    var rows = batchable().filter(function (r) { return wf.batch[String(r.ROWID)]; }), keep = {};
+    rows.forEach(function (r) { keep[String(r.ROWID)] = true; });
+    wf.batch = keep; // forget requests that are gone or no longer pushable
+    return rows;
+  }
+  function batchCheckCell(r) {
+    return r.canPush ? '<label class="vf-check" title="Select for one push with other icons"><input type="checkbox" data-vf-batch="' + esc(r.ROWID) + '" data-stage="' + stageOf(r) + '" aria-label="Select ' + esc(r.iconName) + '"></label>' : '';
+  }
+  function batchBarHtml() {
+    if (!batchable().length) return '';
+    return '<div class="vf-batch" id="wfBatchBar">' +
+      '<span class="vf-batch-count" id="wfBatchCount"></span>' +
+      '<button class="btn btn-primary btn-sm" id="wfBatchPushBtn" type="button" disabled>Push selected</button>' +
+      '<button class="btn btn-ghost btn-sm vf-pill wf-npm-login-btn" type="button" title="Log in to the npm registry on this machine. The push publishes the new package version under this npm user.">npm login</button>' +
+      '<span class="vf-msg wf-npm-state">Checking the npm login of this machine…</span></div>';
+  }
+  function updateBatchBar() {
+    if (!$('#wfBatchBar').length) return;
+    var rows = batchRows(), n = rows.length, stage = n ? stageOf(rows[0]) : '', ready = !!(wf.npm && wf.npm.state === 'in');
+    $('#wfRequestsList [data-vf-batch]').each(function () {
+      var other = stage && $(this).data('stage') !== stage;
+      $(this).prop('checked', !!wf.batch[String($(this).data('vf-batch'))]).prop('disabled', !!other)
+        .closest('.vf-check').attr('title', other ? 'One push goes to one branch: the selected icons are for the ' + BRANCH_LABEL[stage].toLowerCase() : 'Select for one push with other icons');
+    });
+    var all = batchable().filter(function (r) { return !stage || stageOf(r) === stage; });
+    $('#wfBatchAll').prop('checked', n > 0 && n === all.length).prop('indeterminate', n > 0 && n < all.length);
+    $('#wfBatchCount').text(n ? n + ' selected · ' + BRANCH_LABEL[stage].toLowerCase() : 'Tick the icons to push together');
+    $('#wfBatchPushBtn').prop('disabled', !n || !ready)
+      .text(n ? 'Push ' + n + ' selected · one commit, one npm version' : 'Push selected')
+      .attr('title', !n ? 'Tick one or more icons first' : ready ? 'Adds the selected icons in one commit and publishes one npm version' : 'Log in to npm first');
+  }
+  $(document).on('click', '.vf-check', function (e) { e.stopPropagation(); }); // ticking a row does not open it
+  $(document).on('change', '[data-vf-batch]', function () {
+    wf.batch = wf.batch || {};
+    var id = String($(this).data('vf-batch')), rows = batchRows();
+    // One push goes to one branch: an icon of the other branch cannot join the selection.
+    if (this.checked && rows.length && stageOf(rows[0]) !== $(this).data('stage')) { this.checked = false; updateBatchBar(); return; }
+    if (this.checked) wf.batch[id] = true; else delete wf.batch[id];
+    updateBatchBar();
+  });
+  $(document).on('change', '#wfBatchAll', function () {
+    var rows = batchRows(), list = batchable(), stage = rows.length ? stageOf(rows[0]) : (list[0] ? stageOf(list[0]) : '');
+    wf.batch = {};
+    if (this.checked) list.forEach(function (r) { if (stageOf(r) === stage) wf.batch[String(r.ROWID)] = true; });
+    updateBatchBar();
+  });
+
+  $(document).on('click', '#wfBatchPushBtn', function () {
+    var rows = batchRows();
+    if (!rows.length) return;
+    var login = takeNpmLogin(); // used for this push only
+    if (!login) { showNpmState(wf.npm && wf.npm.state === 'off' ? 'off' : 'out'); window.alert('Log in to npm first: every push asks for your npm username and password.'); return; }
+    var stage = stageOf(rows[0]), names = rows.map(function (r) { return r.iconName; });
+    if (!window.confirm((stage === 'master' ? 'Approve and push to master. ' : '') + 'Push these ' + rows.length + ' icon' + (rows.length === 1 ? '' : 's') + ' to the ' + branchName(stage) +
+        ' in ONE commit and publish ONE npm version?\n\n' + names.join(', '))) { wf.npmLogin = login; showNpmState('in'); return; }
+    var $btn = $(this).prop('disabled', true).text('Pushing ' + rows.length + '…');
+    var files = {}, plan = [], saved = false, saveOut = null, npmOut = null, recordErrors = [];
+    var uniq = function (list) { return list.filter(function (x, i) { return list.indexOf(x) === i; }); };
+    SF.showToast('Preparing ' + rows.length + ' icon' + (rows.length === 1 ? '' : 's') + ' for one push to the ' + BRANCH_LABEL[stage].toLowerCase() + '…');
+    loadRepoIds().then(function () {
+      // The list has no drawings: read each selected request (its svg), then decide per icon: already there / replace / add.
+      return Promise.all(rows.map(function (r) { return api('GET', 'requests/' + encodeURIComponent(r.ROWID)); }));
+    }).then(function (details) {
+      details.forEach(function (res) {
+        var r = res.request, icon = { symbolId: r.symbolId, sprite: r.sprite }, b = wf.cmp[stage], m = compareWith(icon, stage);
+        var p = { r: r, drawing: uiFingerprint(icon), changed: false, replaceId: '', file: r.targetSprite + '.svg' };
+        if (m === 'same' || m === 'alias') p.there = true;
+        else if (m === 'changed') { p.replaceId = b.realId[normId(r.symbolId)]; p.file = (b.sprite[normId(r.symbolId)] || r.targetSprite) + '.svg'; }
+        plan.push(p);
+      });
+      var need = uniq(plan.filter(function (p) { return !p.there; }).map(function (p) { return p.file; }));
+      return Promise.all(need.map(function (f) { return fetchRepoText(stage, f).then(function (t) { files[f] = t; }); }));
+    }).then(function () {
+      var errors = [];
+      plan.forEach(function (p) {
+        if (p.there) return;
+        var res;
+        if (p.replaceId) {
+          res = SF.replaceIconInSpriteText(files[p.file], p.replaceId, { name: p.r.iconName, text: p.r.svg });
+          if (res.error) { errors.push(p.r.iconName + ' (' + res.error + ')'); return; }
+        } else {
+          res = SF.addIconsToSpriteText(files[p.file], [{ name: p.r.iconName, text: p.r.svg }]);
+          if (!res.added.length) {
+            var why = res.skipped.length ? res.skipped[0].reason : 'nothing to add';
+            if (why === 'already in the sprite') p.there = true; else errors.push(p.r.iconName + ' (' + why + ')');
+            return;
+          }
+        }
+        files[p.file] = res.svg; p.changed = true; // the next icon of the same sprite builds on this text
+      });
+      if (errors.length) throw new Error('Nothing was pushed. Untick or fix: ' + errors.join('; '));
+      var changed = plan.filter(function (p) { return p.changed; });
+      if (!changed.length) return null; // every icon is already on the branch: only recorded
+      var changedFiles = uniq(changed.map(function (p) { return p.file; })), list = changed.map(function (p) { return p.r.iconName; });
+      return new Promise(function (resolve, reject) {
+        $.ajax({
+          url: SF.masterLibraryUrl(STAGE_API[stage] + '/save'), type: 'POST', dataType: 'json',
+          headers: SF.masterLibraryAuthHeaders(), contentType: 'application/json',
+          data: JSON.stringify({ files: changedFiles.map(function (f) { return { name: f, content: files[f] }; }),
+            message: 'Add ' + list.length + ' icon' + (list.length === 1 ? '' : 's') + ' (' + list.slice(0, 8).join(', ') + (list.length > 8 ? ', +' + (list.length - 8) + ' more' : '') + ') to ' +
+              changedFiles.join(', ') + ' (' + stage + ' verified) via SpriteForge' }),
+          success: function (out) {
+            if (!out || out.success === false || out.pushError) reject(new Error((out && (out.pushError || out.message)) || 'Push failed'));
+            else resolve(out);
+          },
+          error: function (xhr) { reject(new Error((xhr.responseJSON && xhr.responseJSON.message) || 'Push failed')); }
+        });
+      });
+    }).then(function (out) {
+      saved = true; saveOut = out;
+      if (out && typeof SF.setLibraryVersion === 'function') SF.setLibraryVersion(out, stage);
+      // Every request is recorded with the SAME commit: the one npm version is then written to each of them.
+      var seq = Promise.resolve();
+      plan.forEach(function (p) {
+        seq = seq.then(function () {
+          return api('POST', 'requests/' + p.r.ROWID + '/push', { commitSha: (p.changed && out && out.commit) || '', version: (out && out.release && out.release.version) || '', alreadyThere: !p.changed, drawing: p.drawing })
+            .catch(function (e) { recordErrors.push(p.r.iconName + ': ' + e.message); });
+        });
+      });
+      return seq;
+    }).then(function () {
+      if (!saveOut || !(saveOut.release && saveOut.release.external) || !wf.branches[stage]) return;
+      SF.showToast('Pushed in one commit — publishing one npm version from this machine…');
+      return npmHelper('POST', '/publish', { branch: wf.branches[stage], ticket: login.ticket })
+        .then(function (res) { npmOut = res || { ok: false, error: 'no answer' }; }, function (e) { npmOut = { ok: false, error: e.message }; });
+    }).then(function () {
+      var done = plan.filter(function (p) { return p.changed; }).length, there = plan.length - done;
+      SF.showToast((done ? 'Pushed ' + done + ' icon' + (done === 1 ? '' : 's') + ' to the ' + BRANCH_LABEL[stage].toLowerCase() + ' in one commit' : 'Nothing new to push') +
+        (there ? ' · ' + there + ' already on the branch — recorded' : '') +
+        (npmOut && npmOut.ok && npmOut.state === 'published' ? ' · published ' + npmOut.version + ' to npm as ' + (npmOut.user || login.user)
+          : npmOut && npmOut.ok && npmOut.state === 'dryrun' ? ' · npm helper is in dry-run mode: ' + npmOut.version + ' was NOT published'
+          : npmOut && !npmOut.ok ? ' · the npm publish failed: ' + npmOut.error + ' — open one of the requests and press Re-publish to npm'
+          : npmOut && npmOut.ok ? ' · the version was already published from another machine'
+          : saveOut && saveOut.release && saveOut.release.version ? ' · published ' + saveOut.release.version : '') +
+        (recordErrors.length ? ' · NOT recorded: ' + recordErrors.join('; ') : ''));
+      wf.batch = {};
+      wf.follow = plan.map(function (p) { return p.r.ROWID; }); // show them in the Pushed tab
+      resetRepoIds();
+      return Promise.all([loadRequests(), loadStatuses()]);
+    }).catch(function (e) {
+      if (!saved) wf.npmLogin = login; // nothing was pushed: the login is still unused
+      fail(e);
+    }).then(function () { $btn.text('Push selected'); checkNpmLogin(); });
   });
 
   // Push: add the single icon to the chosen sprite of the request's branch (mock or master), then record it.
@@ -1188,6 +1464,7 @@
           : releaseExternal ? ' · not published to npm yet — open the request and press Re-publish to npm'
           : pushedVersion ? (releasePending ? ' · version ' + pushedVersion + ' committed — the office npm publisher publishes it within a minute' : ' · published ' + pushedVersion) : '') +
         (releaseOff ? ' · no version bump / npm publish: the release is switched off on this server (REPO_NPM_PUBLISH)' : ''));
+      wf.follow = [r.ROWID]; // show it in the Pushed tab
       resetRepoIds();
       return Promise.all([loadRequests(), loadStatuses()]);
     }).catch(function (e) { if (e && e.cancelled) wf.npmLogin = login; else fail(e); }).then(done); // cancelled before anything was pushed: the login is still unused

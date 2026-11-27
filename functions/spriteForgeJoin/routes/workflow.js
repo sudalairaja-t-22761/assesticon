@@ -32,6 +32,7 @@
  *                                         on the admin's machine; run as  curl -fsSL '<url>' | bash
  *   POST   /api/release/helper-report?code=… → { text }  what the setup command printed (sent by the script itself)
  *   GET    /api/release/helper-report?code=… → { found, at, text }  shown in the setup dialog on "Check again"
+ *   POST   /api/activity/track          → { type: "npm_login", ok, npmUser, machine, error? }  the page reports an npm login (Activity Log)
  *   GET    /api/release/republish       → { branches: { <branch>: [commitSha] } }  the re-publishes admins asked for; polled by
  *                                         scripts/npm-publisher.js (same x-release-token), which answers through /release/published
  *   POST   /api/requests/:id/republish  → admin asks the npm publisher to publish a pushed request again            [admin]
@@ -76,6 +77,7 @@ const { sendMail, approvalMail, releaseMail, statusMail } = require("../lib/mail
 const cliq = require("../lib/cliq");
 const merge = require("../lib/sprite-merge");
 const crypto = require("crypto");
+const activity = require("../lib/activity-log");
 const zlib = require("zlib");
 const { MENUS, MENU_KEYS, loadRoles, syncRoleRows, setRoleMenu, setRoleMenus, createRole, renameRole, deleteRole, getAccess, getRole, requireRole, norm, slug, menuList, isExpired, approverOf, BUILTIN } = require("../lib/roles");
 
@@ -129,7 +131,8 @@ function createWorkflowRouter({ requireSession, repos }) {
             requestId: String(requestId),
             actor: actorOf(who).email || "",
             action,
-            note: str(note, 500)
+            note: str(note, 500),
+            at: new Date().toISOString()
         });
     }
 
@@ -527,11 +530,21 @@ function createWorkflowRouter({ requireSession, repos }) {
         res.json({ success: true, settings: { settings: fields.settings, tagConfig: fields.tagConfig, svgo: fields.svgo }, updatedAt: fields.updatedAt });
     }));
 
+    // The page reports what only it can see: an npm login made through the helper on the admin's machine (never the
+    // password). Kept for the Activity Log.
+    router.post("/activity/track", requireSession, requireRole(), wrap(async (req, res) => {
+        const b = req.body || {};
+        if (b.type !== "npm_login") throw fail(400, "Unknown activity type");
+        await activity.track(req, "npm_login", { ok: !!b.ok, email: me(req).email, name: me(req).name, npmUser: str(b.npmUser, 80), machine: str(b.machine, 80),
+            error: b.ok ? "" : str(b.error, 300), detail: b.ok ? "valid for one push, nothing stored" : "" });
+        res.json({ success: true });
+    }));
+
     // ── users + members (admin) ─────────────────────────────────────────────
     // Admin Activity Log: sign-in / sign-out counts per user and the latest events. ?days=7|30|0(all) &limit=200
     router.get("/activity-log", requireRole(["admin"]), wrap(async (req, res) => {
         const days = Math.max(0, parseInt(req.query.days, 10) || 0);
-        res.json({ success: true, days, ...(await require("../lib/activity-log").summary(req, { days, limit: req.query.limit })) });
+        res.json({ success: true, days, ...(await activity.summary(req, { days, limit: req.query.limit })) });
     }));
 
     // People a saved sprite can be shared with: the same Zoho org search as the Members dialog (type 2+ letters),
@@ -827,13 +840,17 @@ function createWorkflowRouter({ requireSession, repos }) {
         // The pushed requests whose icon commit is in this release: record the result on the request + its timeline.
         const commits = (Array.isArray(b.commits) ? b.commits : []).map((c) => str(c, 64).toLowerCase()).filter((c) => /^[0-9a-f]{7,64}$/.test(c));
         let requests = 0;
+        const logIcons = [], logBy = []; // for the Activity Log: the icons in this release and the admins who pushed them
         if (commits.length) {
             const db = store.forRequest(req);
             const inRelease = (sha) => { const s = String(sha || "").toLowerCase(); return s.length >= 7 && commits.some((c) => c.startsWith(s) || s.startsWith(c)); };
             for (const q of (await db.all("icon_requests")).filter((x) => x.status === "pushed" && inRelease(x.pushCommitSha))) {
+                logIcons.push(q.iconName || q.symbolId || "");
+                const pusher = norm(q.releaseStatus === "requested" && q.republishBy ? q.republishBy : q.pushedBy);
+                if (pusher && !logBy.includes(pusher)) logBy.push(pusher);
                 if (q.releaseStatus === "published") continue; // already recorded (a later failure is about newer icons)
                 await db.update("icon_requests", q.ROWID, { releaseStatus: status, releaseVersion: r.version, releaseTag: r.tag, releaseError: status === "failed" ? r.error.slice(0, 500) : "" });
-                await db.insert("request_events", { requestId: String(q.ROWID), actor: "npm publisher", action: status === "published" ? "npm_published" : "npm_publish_failed",
+                await db.insert("request_events", { requestId: String(q.ROWID), at: new Date().toISOString(), actor: "npm publisher", action: status === "published" ? "npm_published" : "npm_publish_failed",
                     note: (status === "published" ? `${r.name}@${r.version} · tag ${r.tag}` : `${r.version || "version not set"}: ${r.error.slice(0, 400)}`) + (by ? ` · ${by}` : "") });
                 // The requester gets the version of their icon (an admin requester already got the admin message).
                 const to = norm(q.requestedBy);
@@ -844,6 +861,12 @@ function createWorkflowRouter({ requireSession, repos }) {
                 }
                 requests++;
             }
+        }
+        // One Activity Log row per publish attempt: version, npm user, machine and the admin(s) whose push it releases.
+        // A version that is only reported again (re-publish of an already published commit) is not a new publish.
+        if (!/^\(already published in /.test(r.subject)) {
+            await activity.track(req, "npm_publish", { ok: status === "published", pkg: r.name, version: r.version, tag: r.tag, branch: r.branch, commit: r.commit,
+                npmUser: str(b.npmUser, 80), machine: str(b.machine, 80), icons: logIcons, by: logBy, requests: logIcons.length, error: status === "failed" ? r.error : "" });
         }
         res.json({ success: true, sent: sent.length, failed, cliqFailed: botFailed, requests, local: !(req.headers["x-zc-projectid"] || req.headers["x-zc-admin-cred-token"]) });
     }));
@@ -873,7 +896,8 @@ function createWorkflowRouter({ requireSession, repos }) {
         if (helperKey().length < 24) throw fail(503, "RELEASE_NOTIFY_TOKEN is not set on the server");
         const api = safeUrl(req.body && req.body.api), origin = safeUrl(req.body && req.body.origin);
         if (!api || !origin) throw fail(400, "The page address is missing");
-        const payload = Buffer.from(JSON.stringify({ exp: Date.now() + HELPER_CODE_MIN * 60000, api: api.replace(/\/+$/, ""), origin: origin.replace(/\/+$/, "") })).toString("base64url");
+        const payload = Buffer.from(JSON.stringify({ exp: Date.now() + HELPER_CODE_MIN * 60000, api: api.replace(/\/+$/, ""), origin: origin.replace(/\/+$/, ""), by: me(req).email || "" })).toString("base64url");
+        await activity.track(req, "helper_setup_code", { email: me(req).email, name: me(req).name, detail: "setup command shown" });
         console.log(`[release] npm helper setup code issued to ${me(req).email || "?"}`);
         res.json({ success: true, code: payload + "." + helperSign(payload), minutes: HELPER_CODE_MIN });
     }));
@@ -919,6 +943,11 @@ function createWorkflowRouter({ requireSession, repos }) {
             if (old.key === key || !(new Date(old.at).getTime() > day)) await db.remove("helper_reports", old.ROWID).catch(() => {});
         }
         await db.insert("helper_reports", { key, at: new Date().toISOString(), text });
+        let by = ""; try { by = JSON.parse(Buffer.from(String(req.query.code).split(".")[0], "base64url").toString("utf8")).by || ""; } catch (_) { /* unknown admin */ }
+        const good = /helper is running and answers/.test(text) && !/^\s*✗/m.test(text);
+        const info = /user: (\S+) \(id \d+\) · home: \S+ · node (\S+) · ([^\n]+)/.exec(text) || [];
+        await activity.track(req, "helper_setup_report", { ok: good, email: by, machine: info[1] ? `${info[1]} · node ${info[2]} · ${info[3]}`.slice(0, 80) : "",
+            error: good ? "" : (text.split("\n").find((l) => /^\s*✗/.test(l)) || "the helper did not start").trim(), detail: good ? "helper installed and running" : "" });
         console.log(`[release] npm helper setup report (${text.length} chars): ${text.split("\n").filter((l) => /^[✗!]/.test(l.trim())).join(" | ").slice(0, 600) || "no errors"}`);
         res.json({ success: true });
     }));
